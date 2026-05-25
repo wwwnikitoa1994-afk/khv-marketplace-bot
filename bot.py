@@ -1177,9 +1177,9 @@ async def save_new_price(
 
     await state.clear()
 
-# =========================================
+# =================================================
 # BUMP
-# =========================================
+# =================================================
 
 @dp.callback_query(
     F.data.startswith("bump_")
@@ -1230,10 +1230,106 @@ async def bump_ad(
     WHERE id = ?
     """, (
         datetime.now().isoformat(),
-        ad_id
+        ad_id,
     ))
 
     conn.commit()
+
+    # =========================================
+    # ПОЛУЧАЕМ ОБЪЯВЛЕНИЕ
+    # =========================================
+
+    cursor.execute("""
+    SELECT text, photo, message_id
+    FROM ads
+    WHERE id = ?
+    """, (
+        ad_id,
+    ))
+
+    ad_data = cursor.fetchone()
+
+    text = ad_data[0]
+    photo = ad_data[1]
+    old_message_id = ad_data[2]
+
+    # =========================================
+    # УДАЛЯЕМ СТАРЫЙ ПОСТ
+    # =========================================
+
+    try:
+
+        await bot.delete_message(
+            chat_id=CHANNEL_ID,
+            message_id=old_message_id
+        )
+
+    except:
+        pass
+
+    # =========================================
+    # УДАЛЯЕМ СТАРУЮ КНОПКУ
+    # =========================================
+
+    try:
+
+        await bot.delete_message(
+            chat_id=CHANNEL_ID,
+            message_id=old_message_id + 1
+        )
+
+    except:
+        pass
+
+    # =========================================
+    # ПУБЛИКУЕМ НОВЫЙ ПОСТ
+    # =========================================
+
+    new_message = await bot.send_photo(
+        chat_id=CHANNEL_ID,
+        photo=photo,
+        caption=text
+    )
+
+    # =========================================
+    # СОЗДАЁМ КНОПКУ
+    # =========================================
+
+    button = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="➕ Подать своё объявление",
+                    url=BOT_LINK
+                )
+            ]
+        ]
+    )
+
+    await bot.send_message(
+        chat_id=CHANNEL_ID,
+        text="🛒 KHV Marketplace",
+        reply_markup=button
+    )
+
+    # =========================================
+    # СОХРАНЯЕМ НОВЫЙ MESSAGE_ID
+    # =========================================
+
+    cursor.execute("""
+    UPDATE ads
+    SET message_id = ?
+    WHERE id = ?
+    """, (
+        new_message.message_id,
+        ad_id,
+    ))
+
+    conn.commit()
+
+    # =========================================
+    # ОТВЕТ
+    # =========================================
 
     await callback.answer(
         "✅ Объявление поднято",
