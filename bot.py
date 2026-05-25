@@ -17,7 +17,10 @@ from aiogram.types import (
     KeyboardButton,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
-    InputMediaPhoto
+    InputMediaPhoto,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery
 )
 
 # =========================================
@@ -167,6 +170,7 @@ class AdForm(StatesGroup):
 
 @dp.message(CommandStart())
 async def start(message: Message):
+
     await message.answer(
         "🛒 Добро пожаловать в KHV Marketplace",
         reply_markup=main_keyboard
@@ -421,14 +425,6 @@ async def publish_post(message: Message, state: FSMContext):
 
         return
 
-    if len(photos) > 15:
-
-        await message.answer(
-            "❌ Максимум 15 фото"
-        )
-
-        return
-
     action = data["action"]
     category = data["category"]
     title = data["title"]
@@ -560,6 +556,37 @@ async def publish_post(message: Message, state: FSMContext):
     await state.clear()
 
 # =========================================
+# MY ADS KEYBOARD
+# =========================================
+
+def my_ads_keyboard(ads):
+
+    keyboard = []
+
+    keyboard.append([
+        InlineKeyboardButton(
+            text="🔄 Поднять все доступные",
+            callback_data="bump_all"
+        )
+    ])
+
+    for ad in ads:
+
+        ad_id = ad[0]
+        title = ad[1]
+
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"📦 {title}",
+                callback_data=f"ad_{ad_id}"
+            )
+        ])
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=keyboard
+    )
+
+# =========================================
 # MY ADS
 # =========================================
 
@@ -585,27 +612,209 @@ async def my_ads(message: Message):
 
         return
 
-    text = "📂 Ваши объявления:\n\n"
+    await message.answer(
+        "📂 Ваши объявления:",
+        reply_markup=my_ads_keyboard(ads)
+    )
+
+# =========================================
+# OPEN AD
+# =========================================
+
+@dp.callback_query(F.data.startswith("ad_"))
+async def open_ad(callback: CallbackQuery):
+
+    ad_id = int(
+        callback.data.split("_")[1]
+    )
+
+    cursor.execute("""
+    SELECT title, status
+    FROM ads
+    WHERE id = ?
+    """, (
+        ad_id,
+    ))
+
+    ad = cursor.fetchone()
+
+    if not ad:
+
+        await callback.answer(
+            "❌ Объявление не найдено",
+            show_alert=True
+        )
+
+        return
+
+    title = ad[0]
+    status = ad[1]
+
+    status_text = "🟢 Активно"
+
+    if status == "closed":
+        status_text = "❌ Закрыто"
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔄 Поднять",
+                    callback_data=f"bump_{ad_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Редактировать",
+                    callback_data=f"edit_{ad_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Закрыть",
+                    callback_data=f"close_{ad_id}"
+                )
+            ]
+        ]
+    )
+
+    await callback.message.edit_text(
+        f"📦 {title}\n\n"
+        f"{status_text}",
+        reply_markup=keyboard
+    )
+
+# =========================================
+# BUMP ALL
+# =========================================
+
+@dp.callback_query(F.data == "bump_all")
+async def bump_all(callback: CallbackQuery):
+
+    cursor.execute("""
+    SELECT id, last_bump
+    FROM ads
+    WHERE user_id = ?
+    AND status = 'active'
+    """, (
+        callback.from_user.id,
+    ))
+
+    ads = cursor.fetchall()
+
+    bumped = 0
 
     for ad in ads:
 
-        status_emoji = "🟢"
+        ad_id = ad[0]
 
-        if ad[2] == "closed":
-            status_emoji = "❌"
+        cursor.execute("""
+        UPDATE ads
+        SET last_bump = ?
+        WHERE id = ?
+        """, (
+            datetime.now().isoformat(),
+            ad_id
+        ))
 
-        text += (
-            f"{status_emoji} "
-            f"ID {ad[0]} — {ad[1]}\n"
+        conn.commit()
+
+        bumped += 1
+
+    await callback.answer(
+        f"✅ Поднято объявлений: {bumped}",
+        show_alert=True
+    )
+
+# =========================================
+# CLOSE AD
+# =========================================
+
+@dp.callback_query(F.data.startswith("close_"))
+async def close_ad(callback: CallbackQuery):
+
+    ad_id = int(
+        callback.data.split("_")[1]
+    )
+
+    cursor.execute("""
+    UPDATE ads
+    SET status = 'closed'
+    WHERE id = ?
+    """, (
+        ad_id,
+    ))
+
+    conn.commit()
+
+    await callback.message.edit_text(
+        "❌ Объявление закрыто"
+    )
+
+# =========================================
+# EDIT
+# =========================================
+
+@dp.callback_query(F.data.startswith("edit_"))
+async def edit_ad(callback: CallbackQuery):
+
+    await callback.answer(
+        "⚠️ Редактирование скоро будет добавлено",
+        show_alert=True
+    )
+
+# =========================================
+# BUMP
+# =========================================
+
+@dp.callback_query(F.data.startswith("bump_"))
+async def bump_ad(callback: CallbackQuery):
+
+    ad_id = int(
+        callback.data.split("_")[1]
+    )
+
+    cursor.execute("""
+    SELECT last_bump
+    FROM ads
+    WHERE id = ?
+    """, (
+        ad_id,
+    ))
+
+    ad = cursor.fetchone()
+
+    if not ad:
+
+        await callback.answer(
+            "❌ Объявление не найдено",
+            show_alert=True
         )
 
-    await message.answer(text)
+        return
+
+    cursor.execute("""
+    UPDATE ads
+    SET last_bump = ?
+    WHERE id = ?
+    """, (
+        datetime.now().isoformat(),
+        ad_id
+    ))
+
+    conn.commit()
+
+    await callback.answer(
+        "✅ Объявление поднято",
+        show_alert=True
+    )
 
 # =========================================
 # WEB SERVER
 # =========================================
 
 async def healthcheck(request):
+
     return web.Response(
         text="Bot is running"
     )
@@ -642,4 +851,4 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())  
+    asyncio.run(main())
