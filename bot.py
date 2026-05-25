@@ -867,14 +867,14 @@ async def back_ads(callback: CallbackQuery):
 # =========================================
 
 @dp.callback_query(
-    F.data.startswith("close_")
+    F.data.startswith("confirm_close_")
 )
-async def close_ad(
+async def confirm_close_ad(
     callback: CallbackQuery
 ):
 
     ad_id = int(
-        callback.data.split("_")[1]
+        callback.data.split("_")[2]
     )
 
     cursor.execute("""
@@ -898,6 +898,10 @@ async def close_ad(
 
     message_id = ad[0]
 
+    # =========================================
+    # УДАЛЯЕМ ПОСТ
+    # =========================================
+
     try:
 
         await bot.delete_message(
@@ -905,12 +909,29 @@ async def close_ad(
             message_id=message_id
         )
 
-    except:
-        pass
+    except Exception as e:
+        print(e)
+
+    # =========================================
+    # УДАЛЯЕМ КНОПКУ
+    # =========================================
+
+    try:
+
+        await bot.delete_message(
+            chat_id=CHANNEL_ID,
+            message_id=message_id + 1
+        )
+
+    except Exception as e:
+        print(e)
+
+    # =========================================
+    # УДАЛЯЕМ ИЗ БАЗЫ
+    # =========================================
 
     cursor.execute("""
-    UPDATE ads
-    SET status = 'closed'
+    DELETE FROM ads
     WHERE id = ?
     """, (
         ad_id,
@@ -918,8 +939,32 @@ async def close_ad(
 
     conn.commit()
 
+    # =========================================
+    # ОБНОВЛЯЕМ СПИСОК
+    # =========================================
+
+    cursor.execute("""
+    SELECT id, title
+    FROM ads
+    WHERE user_id = ?
+    ORDER BY id DESC
+    """, (
+        callback.from_user.id,
+    ))
+
+    ads = cursor.fetchall()
+
+    if not ads:
+
+        await callback.message.edit_text(
+            "📭 У вас нет объявлений"
+        )
+
+        return
+
     await callback.message.edit_text(
-        "❌ Объявление закрыто"
+        "📂 Ваши объявления:",
+        reply_markup=my_ads_keyboard(ads)
     )
 
 # =========================================
