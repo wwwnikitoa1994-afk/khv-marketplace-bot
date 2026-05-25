@@ -679,7 +679,7 @@ async def publish_post(
     await bot.send_message(
         chat_id=CHANNEL_ID,
         text="ㅤ",
-        reply_markup=keyboard
+        reply_markup=keyboard,
         disable_web_page_preview=True
     )
 
@@ -1117,7 +1117,7 @@ async def save_new_price(
     await bot.send_message(
         chat_id=CHANNEL_ID,
         text="ㅤ",
-        reply_markup=keyboard
+        reply_markup=keyboard,
         disable_web_page_preview=True
     )
 
