@@ -678,7 +678,7 @@ async def publish_post(
 
     await bot.send_message(
         chat_id=CHANNEL_ID,
-        text="ㅤ",
+        text="🛒 KHV Marketplace",
         reply_markup=keyboard,
         disable_web_page_preview=True
     )
@@ -822,15 +822,45 @@ async def open_ad(
                     text="❌ Закрыть",
                     callback_data=f"close_{ad_id}"
                 )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data="back_ads"
+                )
             ]
-        ]
     )
 
     await callback.message.edit_text(
         f"📦 Объявление ID {ad_id}",
         reply_markup=keyboard
     )
+@dp.callback_query(F.data == "back_ads")
+async def back_ads(callback: CallbackQuery):
 
+    cursor.execute("""
+    SELECT id, title
+    FROM ads
+    WHERE user_id = ?
+    ORDER BY id DESC
+    """, (
+        callback.from_user.id,
+    ))
+
+    ads = cursor.fetchall()
+
+    if not ads:
+
+        await callback.message.edit_text(
+            "📭 У вас нет объявлений"
+        )
+
+        return
+
+    await callback.message.edit_text(
+        "📂 Ваши объявления:",
+        reply_markup=my_ads_keyboard(ads)
+    )
 # =========================================
 # CLOSE AD
 # =========================================
@@ -1116,7 +1146,7 @@ async def save_new_price(
 
     await bot.send_message(
         chat_id=CHANNEL_ID,
-        text="ㅤ",
+        text="🛒 KHV Marketplace",
         reply_markup=keyboard,
         disable_web_page_preview=True
     )
