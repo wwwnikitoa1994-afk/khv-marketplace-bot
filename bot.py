@@ -676,10 +676,10 @@ async def publish_post(
         ]
     )
 
-await bot.send_message(
-    chat_id=CHANNEL_ID,
-    text="ㅤ",
-    reply_markup=keyboard
+    await bot.send_message(
+        chat_id=CHANNEL_ID,
+        text="ㅤ",
+        reply_markup=keyboard
     )
 
     cursor.execute("""
