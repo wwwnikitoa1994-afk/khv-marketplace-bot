@@ -862,9 +862,45 @@ async def back_ads(callback: CallbackQuery):
         "📂 Ваши объявления:",
         reply_markup=my_ads_keyboard(ads)
     )
-# =========================================
+# =================================================
 # CLOSE AD
-# =========================================
+# =================================================
+
+@dp.callback_query(
+    F.data.regexp(r"^close_\d+$")
+)
+async def close_ad(
+    callback: CallbackQuery
+):
+
+    ad_id = int(
+        callback.data.split("_")[1]
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да",
+                    callback_data=f"confirm_close_{ad_id}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Нет",
+                    callback_data=f"cancel_close_{ad_id}"
+                )
+            ]
+        ]
+    )
+
+    await callback.message.edit_text(
+        "❓ Вы уверены что хотите закрыть объявление?",
+        reply_markup=keyboard
+    )
+
+
+# =================================================
+# CONFIRM CLOSE
+# =================================================
 
 @dp.callback_query(
     F.data.startswith("confirm_close_")
@@ -965,6 +1001,56 @@ async def confirm_close_ad(
     await callback.message.edit_text(
         "📂 Ваши объявления:",
         reply_markup=my_ads_keyboard(ads)
+    )
+
+
+# =================================================
+# CANCEL CLOSE
+# =================================================
+
+@dp.callback_query(
+    F.data.startswith("cancel_close_")
+)
+async def cancel_close_ad(
+    callback: CallbackQuery
+):
+
+    ad_id = int(
+        callback.data.split("_")[2]
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔄 Поднять",
+                    callback_data=f"bump_{ad_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Изменить цену",
+                    callback_data=f"edit_{ad_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Закрыть",
+                    callback_data=f"close_{ad_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data="back_ads"
+                )
+            ]
+        ]
+    )
+
+    await callback.message.edit_text(
+        f"📦 Объявление ID {ad_id}",
+        reply_markup=keyboard
     )
 
 # =========================================
