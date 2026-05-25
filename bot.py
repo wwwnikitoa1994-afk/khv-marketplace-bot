@@ -1,5 +1,7 @@
 import asyncio
+import sqlite3
 
+from datetime import datetime
 from aiohttp import web
 
 from aiogram import Bot, Dispatcher, F
@@ -9,6 +11,7 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+
 from aiogram.types import (
     Message,
     KeyboardButton,
@@ -17,8 +20,57 @@ from aiogram.types import (
     InputMediaPhoto
 )
 
+# =========================================
+# CONFIG
+# =========================================
+
 TOKEN = "8634367728:AAG_gKuluoogGD2km02bakEH35kjvr6nALU"
 CHANNEL_ID = "@khv_marketplace"
+
+ADMIN_IDS = [
+    123456789
+]
+
+# =========================================
+# DATABASE
+# =========================================
+
+conn = sqlite3.connect("database.db")
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS ads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    user_id INTEGER,
+    username TEXT,
+
+    action TEXT,
+    category TEXT,
+
+    title TEXT,
+    description TEXT,
+
+    condition TEXT,
+    price TEXT,
+    exchange TEXT,
+
+    photos TEXT,
+
+    message_id INTEGER,
+
+    created_at TEXT,
+    last_bump TEXT,
+
+    status TEXT
+)
+""")
+
+conn.commit()
+
+# =========================================
+# BOT
+# =========================================
 
 bot = Bot(
     token=TOKEN,
@@ -29,12 +81,14 @@ bot = Bot(
 
 dp = Dispatcher(storage=MemoryStorage())
 
-
-# ---------- KEYBOARDS ----------
+# =========================================
+# KEYBOARDS
+# =========================================
 
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="➕ Добавить объявление")]
+        [KeyboardButton(text="➕ Опубликовать объявление")],
+        [KeyboardButton(text="📂 Мои объявления")]
     ],
     resize_keyboard=True
 )
@@ -85,8 +139,17 @@ condition_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+photo_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Опубликовать")],
+        [KeyboardButton(text="🚫 Отмена")]
+    ],
+    resize_keyboard=True
+)
 
-# ---------- STATES ----------
+# =========================================
+# STATES
+# =========================================
 
 class AdForm(StatesGroup):
     action = State()
@@ -98,8 +161,9 @@ class AdForm(StatesGroup):
     exchange = State()
     photos = State()
 
-
-# ---------- START ----------
+# =========================================
+# START
+# =========================================
 
 @dp.message(CommandStart())
 async def start(message: Message):
@@ -108,9 +172,13 @@ async def start(message: Message):
         reply_markup=main_keyboard
     )
 
+# =========================================
+# CREATE AD
+# =========================================
 
-@dp.message(F.text == "➕ Добавить объявление")
+@dp.message(F.text == "➕ Опубликовать объявление")
 async def create_ad(message: Message, state: FSMContext):
+
     await state.clear()
 
     await message.answer(
@@ -120,12 +188,16 @@ async def create_ad(message: Message, state: FSMContext):
 
     await state.set_state(AdForm.action)
 
-
-# ---------- ACTION ----------
+# =========================================
+# ACTION
+# =========================================
 
 @dp.message(AdForm.action)
 async def get_action(message: Message, state: FSMContext):
-    await state.update_data(action=message.text)
+
+    await state.update_data(
+        action=message.text
+    )
 
     await message.answer(
         "Выберите категорию:",
@@ -134,12 +206,16 @@ async def get_action(message: Message, state: FSMContext):
 
     await state.set_state(AdForm.category)
 
-
-# ---------- CATEGORY ----------
+# =========================================
+# CATEGORY
+# =========================================
 
 @dp.message(AdForm.category)
 async def get_category(message: Message, state: FSMContext):
-    await state.update_data(category=message.text)
+
+    await state.update_data(
+        category=message.text
+    )
 
     await message.answer(
         "📌 Название товара:",
@@ -148,29 +224,40 @@ async def get_category(message: Message, state: FSMContext):
 
     await state.set_state(AdForm.title)
 
-
-# ---------- TITLE ----------
+# =========================================
+# TITLE
+# =========================================
 
 @dp.message(AdForm.title)
 async def get_title(message: Message, state: FSMContext):
-    await state.update_data(title=message.text)
 
-    await message.answer("📝 Описание товара:")
+    await state.update_data(
+        title=message.text
+    )
+
+    await message.answer(
+        "📝 Описание товара:"
+    )
 
     await state.set_state(AdForm.description)
 
-
-# ---------- DESCRIPTION ----------
+# =========================================
+# DESCRIPTION
+# =========================================
 
 @dp.message(AdForm.description)
 async def get_description(message: Message, state: FSMContext):
-    await state.update_data(description=message.text)
+
+    await state.update_data(
+        description=message.text
+    )
 
     data = await state.get_data()
 
     action = data["action"]
 
     if action in ["🟢 Продам", "🟠 Обменяю"]:
+
         await message.answer(
             "📦 Состояние товара:",
             reply_markup=condition_keyboard
@@ -179,104 +266,167 @@ async def get_description(message: Message, state: FSMContext):
         await state.set_state(AdForm.condition)
 
     elif action == "🔵 Куплю":
-        await message.answer("💰 Бюджет:")
+
+        await message.answer(
+            "💰 Бюджет:"
+        )
 
         await state.set_state(AdForm.price)
 
     else:
-        await message.answer(
-            "📷 Отправьте от 1 до 15 фото.\n"
-            "Когда закончите — напишите ГОТОВО"
+
+        await state.update_data(
+            photos=[]
         )
 
-        await state.update_data(photos=[])
+        await message.answer(
+            "📷 Отправьте от 1 до 15 фото",
+            reply_markup=photo_keyboard
+        )
 
         await state.set_state(AdForm.photos)
 
-
-# ---------- CONDITION ----------
+# =========================================
+# CONDITION
+# =========================================
 
 @dp.message(AdForm.condition)
 async def get_condition(message: Message, state: FSMContext):
-    await state.update_data(condition=message.text)
+
+    await state.update_data(
+        condition=message.text
+    )
 
     data = await state.get_data()
 
     action = data["action"]
 
     if action == "🟢 Продам":
-        await message.answer("💰 Цена:")
+
+        await message.answer(
+            "💰 Цена:"
+        )
 
         await state.set_state(AdForm.price)
 
     else:
-        await message.answer("🔄 На что хотите обмен?")
+
+        await message.answer(
+            "🔄 На что хотите обмен?"
+        )
 
         await state.set_state(AdForm.exchange)
 
-
-# ---------- PRICE ----------
+# =========================================
+# PRICE
+# =========================================
 
 @dp.message(AdForm.price)
 async def get_price(message: Message, state: FSMContext):
-    await state.update_data(price=message.text)
 
-    await message.answer(
-        "📷 Отправьте от 1 до 15 фото.\n"
-        "Когда закончите — напишите ГОТОВО"
+    await state.update_data(
+        price=message.text
     )
 
-    await state.update_data(photos=[])
+    await state.update_data(
+        photos=[]
+    )
+
+    await message.answer(
+        "📷 Отправьте от 1 до 15 фото",
+        reply_markup=photo_keyboard
+    )
 
     await state.set_state(AdForm.photos)
 
-
-# ---------- EXCHANGE ----------
+# =========================================
+# EXCHANGE
+# =========================================
 
 @dp.message(AdForm.exchange)
 async def get_exchange(message: Message, state: FSMContext):
-    await state.update_data(exchange=message.text)
 
-    await message.answer(
-        "📷 Отправьте от 1 до 15 фото.\n"
-        "Когда закончите — напишите ГОТОВО"
+    await state.update_data(
+        exchange=message.text
     )
 
-    await state.update_data(photos=[])
+    await state.update_data(
+        photos=[]
+    )
+
+    await message.answer(
+        "📷 Отправьте от 1 до 15 фото",
+        reply_markup=photo_keyboard
+    )
 
     await state.set_state(AdForm.photos)
 
-
-# ---------- PHOTOS ----------
+# =========================================
+# PHOTOS
+# =========================================
 
 @dp.message(AdForm.photos, F.photo)
-async def get_photos(message: Message, state: FSMContext):
+async def get_photo(message: Message, state: FSMContext):
+
     data = await state.get_data()
 
     photos = data.get("photos", [])
 
     if len(photos) >= 15:
-        await message.answer("❌ Максимум 15 фото")
+
+        await message.answer(
+            "❌ Максимум 15 фото"
+        )
+
         return
 
-    photos.append(message.photo[-1].file_id)
-
-    await state.update_data(photos=photos)
-
-    await message.answer(
-        f"✅ Фото добавлено ({len(photos)}/15)\n"
-        "Отправьте ещё фото или напишите ГОТОВО"
+    photos.append(
+        message.photo[-1].file_id
     )
 
+    await state.update_data(
+        photos=photos
+    )
 
-@dp.message(AdForm.photos, F.text.lower() == "готово")
+# =========================================
+# CANCEL
+# =========================================
+
+@dp.message(F.text == "🚫 Отмена")
+async def cancel(message: Message, state: FSMContext):
+
+    await state.clear()
+
+    await message.answer(
+        "❌ Создание объявления отменено",
+        reply_markup=main_keyboard
+    )
+
+# =========================================
+# PUBLISH
+# =========================================
+
+@dp.message(AdForm.photos, F.text == "✅ Опубликовать")
 async def publish_post(message: Message, state: FSMContext):
+
     data = await state.get_data()
 
     photos = data.get("photos", [])
 
     if len(photos) == 0:
-        await message.answer("❌ Нужно минимум 1 фото")
+
+        await message.answer(
+            "❌ Добавьте хотя бы 1 фото"
+        )
+
+        return
+
+    if len(photos) > 15:
+
+        await message.answer(
+            "❌ Максимум 15 фото"
+        )
+
         return
 
     action = data["action"]
@@ -319,13 +469,18 @@ async def publish_post(message: Message, state: FSMContext):
         caption += f"{data['condition']}\n\n"
 
     if "price" in data:
+
         if "Куплю" in action:
             caption += f"💰 Бюджет: {data['price']}\n\n"
+
         else:
             caption += f"💰 Цена: {data['price']}\n\n"
 
     if "exchange" in data:
-        caption += f"🔄 Интересует:\n{data['exchange']}\n\n"
+        caption += (
+            f"🔄 Интересует:\n"
+            f"{data['exchange']}\n\n"
+        )
 
     caption += (
         f"📩 {contact}\n\n"
@@ -335,22 +490,67 @@ async def publish_post(message: Message, state: FSMContext):
     media = []
 
     for i, photo in enumerate(photos):
+
         if i == 0:
+
             media.append(
                 InputMediaPhoto(
                     media=photo,
                     caption=caption
                 )
             )
+
         else:
+
             media.append(
-                InputMediaPhoto(media=photo)
+                InputMediaPhoto(
+                    media=photo
+                )
             )
 
-    await bot.send_media_group(
+    sent_messages = await bot.send_media_group(
         chat_id=CHANNEL_ID,
         media=media
     )
+
+    message_id = sent_messages[0].message_id
+
+    cursor.execute("""
+    INSERT INTO ads (
+        user_id,
+        username,
+        action,
+        category,
+        title,
+        description,
+        condition,
+        price,
+        exchange,
+        photos,
+        message_id,
+        created_at,
+        last_bump,
+        status
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        message.from_user.id,
+        username,
+        action,
+        category,
+        title,
+        description,
+        data.get("condition"),
+        data.get("price"),
+        data.get("exchange"),
+        ",".join(photos),
+        message_id,
+        datetime.now().isoformat(),
+        datetime.now().isoformat(),
+        "active"
+    ))
+
+    conn.commit()
 
     await message.answer(
         "✅ Объявление опубликовано",
@@ -359,34 +559,87 @@ async def publish_post(message: Message, state: FSMContext):
 
     await state.clear()
 
+# =========================================
+# MY ADS
+# =========================================
 
-# ---------- WEB ----------
+@dp.message(F.text == "📂 Мои объявления")
+async def my_ads(message: Message):
+
+    cursor.execute("""
+    SELECT id, title, status
+    FROM ads
+    WHERE user_id = ?
+    ORDER BY id DESC
+    """, (
+        message.from_user.id,
+    ))
+
+    ads = cursor.fetchall()
+
+    if len(ads) == 0:
+
+        await message.answer(
+            "📭 У вас пока нет объявлений"
+        )
+
+        return
+
+    text = "📂 Ваши объявления:\n\n"
+
+    for ad in ads:
+
+        status_emoji = "🟢"
+
+        if ad[2] == "closed":
+            status_emoji = "❌"
+
+        text += (
+            f"{status_emoji} "
+            f"ID {ad[0]} — {ad[1]}\n"
+        )
+
+    await message.answer(text)
+
+# =========================================
+# WEB SERVER
+# =========================================
 
 async def healthcheck(request):
-    return web.Response(text="Bot is running")
-
+    return web.Response(
+        text="Bot is running"
+    )
 
 async def start_web_server():
+
     app = web.Application()
 
-    app.router.add_get("/", healthcheck)
+    app.router.add_get(
+        "/",
+        healthcheck
+    )
 
     runner = web.AppRunner(app)
 
     await runner.setup()
 
-    site = web.TCPSite(runner, "0.0.0.0", 10000)
+    site = web.TCPSite(
+        runner,
+        "0.0.0.0",
+        10000
+    )
 
     await site.start()
 
-
-# ---------- MAIN ----------
+# =========================================
+# MAIN
+# =========================================
 
 async def main():
+
     await start_web_server()
 
     await dp.start_polling(bot)
 
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main())  
