@@ -10,7 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 
-TOKEN = "ТВОЙ_ТОКЕН"
+TOKEN = "8634367728:AAG_gKuluoogGD2km02bakEH35kjvr6nALU"
 CHANNEL_ID = "@khv_marketplace"
 
 bot = Bot(
