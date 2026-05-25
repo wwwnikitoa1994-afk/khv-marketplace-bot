@@ -1,5 +1,6 @@
 import asyncio
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -9,7 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 
-TOKEN = "8634367728:AAG_gKuluoogGD2km02bakEH35kjvr6nALU"
+TOKEN = "ТВОЙ_ТОКЕН"
 CHANNEL_ID = "@khv_marketplace"
 
 bot = Bot(
@@ -136,7 +137,27 @@ async def no_photo(message: Message):
     await message.answer("❌ Нужно обязательно отправить фото товара")
 
 
+async def healthcheck(request):
+    return web.Response(text="Bot is running")
+
+
+async def start_web_server():
+    app = web.Application()
+
+    app.router.add_get("/", healthcheck)
+
+    runner = web.AppRunner(app)
+
+    await runner.setup()
+
+    site = web.TCPSite(runner, "0.0.0.0", 10000)
+
+    await site.start()
+
+
 async def main():
+    await start_web_server()
+
     await dp.start_polling(bot)
 
 
