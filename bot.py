@@ -829,6 +829,7 @@ async def open_ad(
                     callback_data="back_ads"
                 )
             ]
+        ]
     )
 
     await callback.message.edit_text(
