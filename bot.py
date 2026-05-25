@@ -678,7 +678,7 @@ async def publish_post(
 
     await bot.send_message(
         chat_id=CHANNEL_ID,
-        text=" ",
+        text="➕ Подать своё объявление",
         reply_markup=keyboard
     )
 
