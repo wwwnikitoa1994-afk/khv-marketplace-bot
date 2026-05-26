@@ -27,7 +27,7 @@ from aiogram.types import (
 # CONFIG
 # =========================================
 
-TOKEN = "8634367728:AAG_gKuluoogGD2km02bakEH35kjvr6nALU"
+TOKEN = "8634367728:AAGEhyOUZ8FjJtUXuRDfBpq-Bbzk5DDD8r4"
 
 CHANNEL_ID = "@khv_marketplace"
 
