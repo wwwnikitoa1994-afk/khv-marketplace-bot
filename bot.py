@@ -448,7 +448,7 @@ async def open_ad(callback: CallbackQuery):
 @dp.callback_query(F.data == "back_ads")
 async def back_ads(callback: CallbackQuery):
     async with db_pool.acquire() as conn:
-        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", callback.fromuser.id)
+        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", callback.from_user.id)
         
     if not ads:
         await callback.message.edit_text("📭 У вас нет активных объявлений.")
