@@ -29,7 +29,7 @@ from aiogram.exceptions import TelegramBadRequest
 # CONFIG
 # =========================================
 
-TOKEN = "PASTE_TOKEN"
+TOKEN = "8634367728:AAEhXbeRhk30alaxl5h4GV_ GWscp8YJGTKU"
 CHANNEL_ID = "@khv_marketplace"
 BOT_LINK = "https://t.me/khv_marketplace_bot"
 
