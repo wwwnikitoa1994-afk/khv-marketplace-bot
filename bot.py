@@ -26,7 +26,7 @@ from aiogram.types import (
 # CONFIG
 # =========================================
 
-TOKEN = "8634367728:AAGEhyOUZ8FjJtUXuRDfBpq -Bbzk5DDD8r4"
+TOKEN = "8634367728:AAGEhyOUZ8FjJtUXuRDfBpq-Bbzk5DDD8r4"
 CHANNEL_ID = "@khv_marketplace"
 BOT_LINK = "https://t.me/khv_marketplace_bot"
 
