@@ -29,7 +29,6 @@ from aiogram.types import (
 # =========================================
 
 TOKEN = os.getenv("BOT_TOKEN", "8634367728:AAG_gKuluoogGD2km02bakEH35kjvr6nALU")
-# Обязательно укажите свой URL базы данных в переменных окружения на Render
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/dbname") 
 CHANNEL_ID = "@khv_marketplace"
 BOT_LINK = "https://t.me/khv_marketplace_bot"
@@ -37,9 +36,8 @@ BOT_LINK = "https://t.me/khv_marketplace_bot"
 ADMIN_IDS = [1095957868]
 COOLDOWN_HOURS = 24  # Ограничение поднятия — 24 часа
 
-# Замки для предотвращения гонки данных при загрузке фото (db_lock убран, так как asyncpg сам управляет пулом)
 photo_locks = {}  
-db_pool = None # Глобальный пул соединений базы данных
+db_pool = None 
 
 # =========================================
 # PERSISTENT FSM STORAGE (POSTGRESQL)
@@ -240,18 +238,36 @@ async def delete_old_album(message_ids_str):
         for msg_id in message_ids_str.split(","):
             if msg_id.strip():
                 await safe_delete_message(CHANNEL_ID, int(msg_id))
+                await asyncio.sleep(0.3)
 
 # =========================================
-# KEYBOARDS LOGIC
+# KEYBOARDS & INTERFACE LOGIC
 # =========================================
 
-def get_my_ads_keyboard(ads):
+def get_my_ads_keyboard(ready_ads, paused_ads):
     keyboard = []
-    if ads:
-        keyboard.append([InlineKeyboardButton(text="🔄 Поднять все доступные", callback_data="bump_all")])
-    for ad in ads:
-        keyboard.append([InlineKeyboardButton(text=f"📦 {ad['title']}", callback_data=f"ad_{ad['id']}")])
+    # Сначала выводим кнопки объявлений, которые можно поднять сейчас
+    for ad in ready_ads:
+        keyboard.append([InlineKeyboardButton(text=ad['title'], callback_data=f"ad_{ad['id']}")])
+    # Затем выводим кнопки объявлений на паузе
+    for ad in paused_ads:
+        keyboard.append([InlineKeyboardButton(text=ad['title'], callback_data=f"ad_{ad['id']}")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def format_my_ads_message(ready_ads, paused_ads):
+    message_text = "📂 <b>Ваши объявления:</b>\n"
+    
+    if ready_ads:
+        message_text += "\n👇 <b>Можно поднять сейчас:</b>\n"
+        for ad in ready_ads:
+            message_text += f"• {ad['title']}\n"
+            
+    if paused_ads:
+        message_text += "\n⏳ <b>Поднять позже:</b>\n"
+        for ad in paused_ads:
+            message_text += f"• {ad['title']}\n"
+            
+    return message_text
 
 def get_single_ad_keyboard(ad_id, last_bump, user_id):
     remaining_time = None if is_admin(user_id) else get_cooldown_remaining(last_bump)
@@ -359,7 +375,7 @@ async def get_photo(message: Message, state: FSMContext):
     if user_id not in photo_locks:
         photo_locks[user_id] = asyncio.Lock()
         
-    async with photo_locks[user_id]:  # Защита от race condition при одновременном приеме медиагруппы
+    async with photo_locks[user_id]:  
         data = await state.get_data()
         photos = data.get("photos", [])
         if len(photos) >= 15:
@@ -415,9 +431,6 @@ async def publish_post(message: Message, state: FSMContext):
         await message.answer("✅ Объявление опубликовано", reply_markup=main_keyboard)
         await state.clear()
 
-        # ========================================================
-        # УВЕДОМЛЕНИЕ АДМИНУ, ЕСЛИ У ПОЛЬЗОВАТЕЛЯ НЕТ ЮЗЕРНЕЙМА
-        # ========================================================
         if not username:
             user_id = message.from_user.id
             user_link = f"tg://user?id={user_id}"
@@ -435,25 +448,39 @@ async def publish_post(message: Message, state: FSMContext):
                     await bot.send_message(chat_id=admin_id, text=admin_alert, parse_mode="HTML")
                 except Exception as admin_err:
                     print(f"Не удалось отправить уведомление админу {admin_id}: {admin_err}")
-        # ========================================================
 
     except Exception as e:
         await message.answer("❌ Ошибка публикации объявления. Попробуйте снова.")
         print(f"Publish error: {e}")
 
 # =========================================
-# INTERFACE & MASS BUMP
+# INTERFACE LOGIC WITH SMART GROUPS
 # =========================================
 
 @dp.message(F.text == "📂 Мои объявления")
 async def my_ads(message: Message):
+    user_id = message.from_user.id
     async with db_pool.acquire() as conn:
-        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", message.from_user.id)
+        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", user_id)
         
     if not ads:
-        await message.answer("📭 У вас нет active объявлений.")
+        await message.answer("📭 У вас нет активных объявлений.")
         return
-    await message.answer("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads))
+
+    ready_ads = []
+    paused_ads = []
+    
+    for row in ads:
+        ad = dict(row)
+        remaining = None if is_admin(user_id) else get_cooldown_remaining(ad['last_bump'])
+        if remaining:
+            paused_ads.append(ad)
+        else:
+            ready_ads.append(ad)
+
+    msg_text = format_my_ads_message(ready_ads, paused_ads)
+    reply_markup = get_my_ads_keyboard(ready_ads, paused_ads)
+    await message.answer(msg_text, reply_markup=reply_markup)
 
 @dp.callback_query(F.data.startswith("ad_"))
 async def open_ad(callback: CallbackQuery):
@@ -470,81 +497,29 @@ async def open_ad(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "back_ads")
 async def back_ads(callback: CallbackQuery):
+    user_id = callback.from_user.id
     async with db_pool.acquire() as conn:
-        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", callback.from_user.id)
+        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", user_id)
         
     if not ads:
         await callback.message.edit_text("📭 У вас нет активных объявлений.")
         return
-    await callback.message.edit_text("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads))
-    await callback.answer()
 
-@dp.callback_query(F.data == "bump_all")
-async def bump_all_ads(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    async with db_pool.acquire() as conn:
-        ad_rows = await conn.fetch("SELECT * FROM ads WHERE user_id = $1 ORDER BY id DESC", user_id)
-
-    if not ad_rows:
-        await callback.answer("📭 У вас нет активных объявлений.", show_alert=True)
-        return
-
-    bumped_count = 0
-    waiting_reports = []
-
-    for row in ad_rows:
+    ready_ads = []
+    paused_ads = []
+    
+    for row in ads:
         ad = dict(row)
-        remaining_time = None if is_admin(user_id) else get_cooldown_remaining(ad["last_bump"])
-
-        if remaining_time:
-            waiting_reports.append(f"• \"{ad['title']}\" — осталось {remaining_time}")
+        remaining = None if is_admin(user_id) else get_cooldown_remaining(ad['last_bump'])
+        if remaining:
+            paused_ads.append(ad)
         else:
-            await delete_old_album(ad["message_ids"])
+            ready_ads.append(ad)
 
-            photos = ad["photos"].split(",") if ad["photos"] else []
-            username = ad["username"]
-            contact = f"@{username}" if username else "Username отсутствует"
-            hashtags = build_hashtags(ad["action"], ad["category"])
-
-            caption = build_caption({
-                "action": ad["action"], "category": ad["category"], "title": ad["title"],
-                "description": ad["description"], "condition": ad["condition"], "price": ad["price"],
-                "old_price": ad["old_price"], "exchange": ad["exchange"], "contact": contact, "hashtags": hashtags
-            })
-            media = [InputMediaPhoto(media=photo, caption=caption if i == 0 else "") for i, photo in enumerate(photos)]
-
-            try:
-                sent_messages = await bot.send_media_group(chat_id=CHANNEL_ID, media=media)
-                msg_ids = [str(m.message_id) for m in sent_messages]
-
-                button = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="➕ Подать своё объявление", url=BOT_LINK)
-                ]])
-                btn_msg = await bot.send_message(chat_id=CHANNEL_ID, text="🛒 KHV Marketplace", reply_markup=button, disable_web_page_preview=True)
-                msg_ids.append(str(btn_msg.message_id))
-
-                async with db_pool.acquire() as conn:
-                    await conn.execute("UPDATE ads SET message_ids = $1, last_bump = $2 WHERE id = $3", ",".join(msg_ids), datetime.now().isoformat(), ad["id"])
-                
-                bumped_count += 1
-            except Exception as e:
-                print(f"Mass bump error for ad {ad['id']}: {e}")
-
-    alert_text = f"✅ Успешно поднято объявлений: {bumped_count}.\n\n" if bumped_count > 0 else "⏳ Ни одно объявление не поднято.\n\n"
-    if waiting_reports:
-        alert_text += "Оставшееся время до поднятия:\n" + "\n".join(waiting_reports)
-    else:
-        alert_text += "Все ваши объявления успешно обновлены!"
-
-    async with db_pool.acquire() as conn:
-        fresh_ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", user_id)
-
-    try:
-        await callback.message.edit_text("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(fresh_ads))
-    except Exception:
-        pass
-
-    await callback.answer(alert_text, show_alert=True)
+    msg_text = format_my_ads_message(ready_ads, paused_ads)
+    reply_markup = get_my_ads_keyboard(ready_ads, paused_ads)
+    await callback.message.edit_text(msg_text, reply_markup=reply_markup)
+    await callback.answer()
 
 # =========================================
 # MANAGEMENT: CLOSE & EDIT PRICE & SINGLE BUMP
@@ -563,6 +538,7 @@ async def close_ad(callback: CallbackQuery):
 @dp.callback_query(F.data.startswith("confirm_close_"))
 async def confirm_close_ad(callback: CallbackQuery):
     ad_id = int(callback.data.split("_")[2])
+    user_id = callback.from_user.id
     async with db_pool.acquire() as conn:
         ad = await conn.fetchrow("SELECT message_ids FROM ads WHERE id = $1", ad_id)
         
@@ -574,12 +550,25 @@ async def confirm_close_ad(callback: CallbackQuery):
     
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM ads WHERE id = $1", ad_id)
-        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", callback.from_user.id)
+        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", user_id)
                 
     if not ads:
         await callback.message.edit_text("📭 У вас нет активных объявлений.")
         return
-    await callback.message.edit_text("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads))
+
+    ready_ads = []
+    paused_ads = []
+    for row in ads:
+        ad_item = dict(row)
+        remaining = None if is_admin(user_id) else get_cooldown_remaining(ad_item['last_bump'])
+        if remaining:
+            paused_ads.append(ad_item)
+        else:
+            ready_ads.append(ad_item)
+
+    msg_text = format_my_ads_message(ready_ads, paused_ads)
+    reply_markup = get_my_ads_keyboard(ready_ads, paused_ads)
+    await callback.message.edit_text(msg_text, reply_markup=reply_markup)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("cancel_close_"))
