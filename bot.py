@@ -414,6 +414,29 @@ async def publish_post(message: Message, state: FSMContext):
 
         await message.answer("✅ Объявление опубликовано", reply_markup=main_keyboard)
         await state.clear()
+
+        # ========================================================
+        # УВЕДОМЛЕНИЕ АДМИНУ, ЕСЛИ У ПОЛЬЗОВАТЕЛЯ НЕТ ЮЗЕРНЕЙМА
+        # ========================================================
+        if not username:
+            user_id = message.from_user.id
+            user_link = f"tg://user?id={user_id}"
+            
+            admin_alert = (
+                f"⚠️ <b>Новое объявление без контактов!</b>\n\n"
+                f"👤 <b>Автор:</b> {message.from_user.full_name}\n"
+                f"📝 <b>Товар:</b> {ad['title']}\n"
+                f"🆔 <b>User ID:</b> <code>{user_id}</code>\n\n"
+                f"🔗 <a href='{user_link}'>[ НАПИСАТЬ ПОЛЬЗОВАТЕЛЮ ]</a>"
+            )
+            
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(chat_id=admin_id, text=admin_alert, parse_mode="HTML")
+                except Exception as admin_err:
+                    print(f"Не удалось отправить уведомление админу {admin_id}: {admin_err}")
+        # ========================================================
+
     except Exception as e:
         await message.answer("❌ Ошибка публикации объявления. Попробуйте снова.")
         print(f"Publish error: {e}")
@@ -428,7 +451,7 @@ async def my_ads(message: Message):
         ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", message.from_user.id)
         
     if not ads:
-        await message.answer("📭 У вас нет активных объявлений.")
+        await message.answer("📭 У вас нет active объявлений.")
         return
     await message.answer("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads))
 
