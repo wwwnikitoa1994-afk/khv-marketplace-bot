@@ -161,9 +161,11 @@ photo_keyboard = ReplyKeyboardMarkup(
 # =========================================
 
 def get_padded_header(text):
-    # Растягиваем шапку невидимыми символами Брайля для фиксации ширины кнопок
-    if len(text) < 27:
-        return text + "\u2800" * (27 - len(text))
+    if len(text) < 20:
+        # Умная растяжка: чередуем обычный пробел и символ Брайля.
+        # Это не дает им склеиться в одно огромное слово.
+        smart_padding = " \u2800" * 12
+        return text + "\n\n" + smart_padding
     return text
 
 def is_admin(user_id):
