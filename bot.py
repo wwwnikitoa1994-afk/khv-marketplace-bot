@@ -302,7 +302,7 @@ def get_single_ad_keyboard(ad_id, last_bump, user_id):
         bump_text = f"⏳ Поднять ({remaining_time})"
         edit_text = f"⏳ Изменить цену ({remaining_time})"
     else:
-        bump_text = "🔄 Можно поднять сейчас"
+        bump_text = "🔄 Можно поднять"
         edit_text = "✏️ Изменить цену"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
