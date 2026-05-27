@@ -34,7 +34,7 @@ CHANNEL_ID = "@khv_marketplace"
 BOT_LINK = "https://t.me/khv_marketplace_bot"
 
 ADMIN_IDS = [1095957868]
-COOLDOWN_HOURS = 24  # Ограничение поднятия — 24 часа
+COOLDOWN_HOURS = 1 / 60   # Ограничение поднятия — 24 часа
 
 photo_locks = {}  
 db_pool = None 
