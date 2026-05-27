@@ -56,10 +56,8 @@ COOLDOWN_HOURS = 24
 
 photo_locks = collections.defaultdict(asyncio.Lock)
 ad_locks = collections.defaultdict(asyncio.Lock)
-db_pool = None 
-
-# Кэш для защиты от спам-кликов по inline-кнопкам
 click_cache = {}
+db_pool = None 
 
 ALLOWED_ACTIONS = ["🟢 Продам", "🔵 Куплю", "🟣 Отдам", "🟠 Обменяю"]
 ALLOWED_CATEGORIES = [
@@ -162,11 +160,15 @@ photo_keyboard = ReplyKeyboardMarkup(
 # HELPERS
 # =========================================
 
+def get_padded_header(text):
+    if len(text) < 30:
+        return text + "\u2800" * (30 - len(text))
+    return text
+
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
 def is_spamming(user_id):
-    """Антифлуд: игнорируем нажатия чаще 1 раза в секунду"""
     now = datetime.now()
     if user_id in click_cache and (now - click_cache[user_id]).total_seconds() < 1.0:
         return True
@@ -297,7 +299,7 @@ def get_single_ad_keyboard(ad_id, last_bump, user_id):
         bump_text = f"⏳ Поднять ({remaining_time})"
         edit_text = f"⏳ Изменить цену ({remaining_time})"
     else:
-        bump_text = "🔄 Можно поднять сейчас"
+        bump_text = "👎 Можно поднять сейчас"
         edit_text = "✏️ Изменить цену"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -412,7 +414,7 @@ async def get_condition(message: Message, state: FSMContext):
 @dp.message(AdForm.price, F.text)
 async def get_price(message: Message, state: FSMContext):
     if len(message.text) > 50:
-        return await message.answer("⚠️ Текст цены слишком длинный. Укажите сумму кратко:")
+        return await message.answer("⚠️ Текст цены слишком длинный. Укажите сумму:")
 
     current_data = await state.get_data()
     photos = current_data.get("photos", [])
@@ -504,7 +506,7 @@ async def publish_post(message: Message, state: FSMContext):
 @dp.message(EditPrice.waiting_price, F.text)
 async def save_new_price(message: Message, state: FSMContext):
     if len(message.text) > 50:
-        return await message.answer("⚠️ Текст цены слишком длинный. Укажите сумму кратко:")
+        return await message.answer("⚠️ Текст цены слишком длинный. Укажите сумму:")
 
     new_price = message.text
     data = await state.get_data()
@@ -607,8 +609,8 @@ async def open_ad(callback: CallbackQuery):
         return await callback.answer("❌ У вас нет прав на просмотр этого объявления", show_alert=True)
 
     keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
-    header_text = f"📦 Управление:\n<b>{html.escape(ad['title'])}</b>"
-    await callback.message.edit_text(header_text, reply_markup=keyboard)
+    header = get_padded_header(html.escape(ad['title']))
+    await callback.message.edit_text(f"📦 <b>{header}</b>", reply_markup=keyboard)
     await callback.answer()
 
 @dp.callback_query(F.data == "back_ads")
@@ -645,8 +647,8 @@ async def close_ad(callback: CallbackQuery):
         InlineKeyboardButton(text="✅ Да", callback_data=f"confirm_close_{ad_id}"),
         InlineKeyboardButton(text="❌ Нет", callback_data=f"cancel_close_{ad_id}")
     ]])
-    header_text = f"📦 Управление:\n<b>{html.escape(ad['title'])}</b>\n\n❓ Вы уверены, что хотите закрыть объявление?"
-    await callback.message.edit_text(header_text, reply_markup=keyboard)
+    header = get_padded_header(html.escape(ad['title']))
+    await callback.message.edit_text(f"📦 <b>{header}</b>\n\n❓ Вы уверены, что хотите закрыть объявление?", reply_markup=keyboard)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("confirm_close_"))
@@ -703,8 +705,8 @@ async def cancel_close_ad(callback: CallbackQuery):
         return await callback.answer("❌ Доступ ограничен", show_alert=True)
 
     keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
-    header_text = f"📦 Управление:\n<b>{html.escape(ad['title'])}</b>"
-    await callback.message.edit_text(header_text, reply_markup=keyboard)
+    header = get_padded_header(html.escape(ad['title']))
+    await callback.message.edit_text(f"📦 <b>{header}</b>", reply_markup=keyboard)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("edit_"))
@@ -727,7 +729,7 @@ async def edit_price_button(callback: CallbackQuery, state: FSMContext):
             return await callback.answer(f"⏳ Изменить цену нельзя.\nБудет доступно через: {remaining_time}", show_alert=True)
             
     await state.update_data(editing_ad_id=ad_id)
-    await callback.message.answer("💰 Введите новую цену (кратко):")
+    await callback.message.answer("💰 Введите новую цену:")
     await state.set_state(EditPrice.waiting_price)
     await callback.answer()
 
@@ -741,7 +743,6 @@ async def bump_ad(callback: CallbackQuery):
     if lock.locked():
         return await callback.answer("⏳ Операция уже выполняется...", show_alert=False)
 
-    # Моментальный ответ на Callback для обхода таймаута в 10 секунд
     await callback.answer("⏳ Обновляем объявление...", show_alert=False)
 
     async with lock:
@@ -792,13 +793,12 @@ async def bump_ad(callback: CallbackQuery):
 
             await delete_old_album(old_message_ids)
 
-            # Обновление шапки с текущим временем, чтобы избежать ошибки MessageNotModified
             now_str = datetime.now().strftime("%H:%M:%S")
-            header_text = f"📦 Управление:\n<b>{html.escape(ad['title'])}</b>\n\n🔄 <i>Обновлено: {now_str}</i>"
+            header = get_padded_header(html.escape(ad['title']))
             new_keyboard = get_single_ad_keyboard(ad_id, datetime.now(), callback.from_user.id)
             
             try:
-                await callback.message.edit_text(header_text, reply_markup=new_keyboard)
+                await callback.message.edit_text(f"📦 <b>{header}</b>\n\n🔄 <i>Обновлено: {now_str}</i>", reply_markup=new_keyboard)
             except TelegramAPIError:
                 pass 
                 
@@ -814,7 +814,6 @@ async def bump_ad(callback: CallbackQuery):
 # GLOBAL FALLBACK
 # =========================================
 
-# Должен быть строго в самом конце файла, чтобы ловить только "мусор"
 @dp.message(AdForm.action)
 @dp.message(AdForm.category)
 @dp.message(AdForm.title)
