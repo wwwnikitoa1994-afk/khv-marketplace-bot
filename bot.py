@@ -44,7 +44,7 @@ logger.addHandler(logging.StreamHandler(sys.stdout))
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    logger.critical("Переменная окружения BOT_TOKEN не задана!")
+    logger.critical("КРИТИЧЕСКАЯ ОШИБКА: Переменная окружения BOT_TOKEN не задана!")
     sys.exit(1)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/dbname") 
@@ -52,11 +52,14 @@ CHANNEL_ID = "@khv_marketplace"
 BOT_LINK = "https://t.me/khv_marketplace_bot"
 
 ADMIN_IDS = [1095957868]
-COOLDOWN_HOURS = 1 / 60   
+COOLDOWN_HOURS = 24  
 
 photo_locks = collections.defaultdict(asyncio.Lock)
 ad_locks = collections.defaultdict(asyncio.Lock)
 db_pool = None 
+
+# Кэш для защиты от спам-кликов по inline-кнопкам
+click_cache = {}
 
 ALLOWED_ACTIONS = ["🟢 Продам", "🔵 Куплю", "🟣 Отдам", "🟠 Обменяю"]
 ALLOWED_CATEGORIES = [
@@ -162,6 +165,14 @@ photo_keyboard = ReplyKeyboardMarkup(
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
+def is_spamming(user_id):
+    """Антифлуд: игнорируем нажатия чаще 1 раза в секунду"""
+    now = datetime.now()
+    if user_id in click_cache and (now - click_cache[user_id]).total_seconds() < 1.0:
+        return True
+    click_cache[user_id] = now
+    return False
+
 def get_cooldown_remaining(last_bump):
     try:
         if isinstance(last_bump, str):
@@ -254,9 +265,7 @@ async def delete_old_album(message_ids_str):
             if msg_id.strip():
                 await safe_delete_message(CHANNEL_ID, int(msg_id))
 
-# Исправление 1: Теперь принимает callable и аргументы
 async def with_retry(func, *args, retries=3, **kwargs):
-    """Глобальный обработчик RetryAfter для API вызовов"""
     for attempt in range(retries):
         try:
             return await func(*args, **kwargs)
@@ -273,10 +282,12 @@ async def with_retry(func, *args, retries=3, **kwargs):
 # KEYBOARDS LOGIC
 # =========================================
 
-def get_my_ads_keyboard(ads):
+def get_my_ads_keyboard(ads, user_id):
     keyboard = []
     for ad in ads:
-        keyboard.append([InlineKeyboardButton(text=f"📦 {ad['title']}", callback_data=f"ad_{ad['id']}")])
+        remaining = None if is_admin(user_id) else get_cooldown_remaining(ad['last_bump'])
+        icon = "⏳" if remaining else "✅"
+        keyboard.append([InlineKeyboardButton(text=f"{icon} {ad['title']}", callback_data=f"ad_{ad['id']}")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_single_ad_keyboard(ad_id, last_bump, user_id):
@@ -286,7 +297,7 @@ def get_single_ad_keyboard(ad_id, last_bump, user_id):
         bump_text = f"⏳ Поднять ({remaining_time})"
         edit_text = f"⏳ Изменить цену ({remaining_time})"
     else:
-        bump_text = "👎 Можно поднять сейчас"
+        bump_text = "🔄 Можно поднять сейчас"
         edit_text = "✏️ Изменить цену"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -315,7 +326,7 @@ class EditPrice(StatesGroup):
     waiting_price = State()
 
 # =========================================
-# HANDLERS
+# HANDLERS: CREATE AD
 # =========================================
 
 @dp.message(CommandStart())
@@ -333,7 +344,7 @@ async def create_ad(message: Message, state: FSMContext):
 async def cancel(message: Message, state: FSMContext):
     await state.clear()
     photo_locks.pop(message.from_user.id, None)  
-    await message.answer("❌ Создание объявления отменено", reply_markup=main_keyboard)
+    await message.answer("❌ Действие отменено", reply_markup=main_keyboard)
 
 @dp.message(AdForm.action, F.text)
 async def get_action(message: Message, state: FSMContext):
@@ -353,7 +364,6 @@ async def get_category(message: Message, state: FSMContext):
     await message.answer("📌 Название товара:", reply_markup=ReplyKeyboardRemove())
     await state.set_state(AdForm.title)
 
-# Исправление 3: Добавлен фильтр F.text везде, где нужен текст
 @dp.message(AdForm.title, F.text)
 async def get_title(message: Message, state: FSMContext):
     if len(message.text) > 100:
@@ -487,156 +497,9 @@ async def publish_post(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка публикации объявления. Попробуйте снова.")
         logger.error(f"Publish error: {e}")
 
-# Глобальный fallback для перехвата левого контента (стикеров, кружочков) в полях текста
-@dp.message(AdForm.action)
-@dp.message(AdForm.category)
-@dp.message(AdForm.title)
-@dp.message(AdForm.description)
-@dp.message(AdForm.condition)
-@dp.message(AdForm.price)
-@dp.message(AdForm.exchange)
-@dp.message(EditPrice.waiting_price)
-async def handle_invalid_content(message: Message):
-    await message.answer("⚠️ Ожидается текстовое сообщение. Пожалуйста, отправьте текст (или воспользуйтесь кнопками). Для отмены нажмите «🚫 Отмена».")
-
 # =========================================
-# INTERFACE
+# HANDLERS: EDIT PRICE
 # =========================================
-
-@dp.message(F.text == "📂 Мои объявления")
-async def my_ads(message: Message):
-    async with db_pool.acquire() as conn:
-        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", message.from_user.id)
-        
-    if not ads:
-        return await message.answer("📭 У вас нет активных объявлений.")
-    await message.answer("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads))
-
-@dp.callback_query(F.data.startswith("ad_"))
-async def open_ad(callback: CallbackQuery):
-    ad_id = int(callback.data.split("_")[1])
-    async with db_pool.acquire() as conn:
-        ad = await conn.fetchrow("SELECT last_bump, user_id FROM ads WHERE id = $1", ad_id)
-        
-    if not ad:
-        return await callback.answer("❌ Объявление не найдено", show_alert=True)
-
-    if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
-        return await callback.answer("❌ У вас нет прав на просмотр этого объявления", show_alert=True)
-
-    keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
-    await callback.message.edit_text(f"📦 Управление объявлением ID {ad_id}", reply_markup=keyboard)
-    await callback.answer()
-
-@dp.callback_query(F.data == "back_ads")
-async def back_ads(callback: CallbackQuery):
-    async with db_pool.acquire() as conn:
-        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", callback.from_user.id)
-        
-    if not ads:
-        return await callback.message.edit_text("📭 У вас нет активных объявлений.")
-    await callback.message.edit_text("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads))
-    await callback.answer()
-
-# =========================================
-# MANAGEMENT: CLOSE & EDIT PRICE & SINGLE BUMP
-# =========================================
-
-@dp.callback_query(F.data.regexp(r"^close_\d+$"))
-async def close_ad(callback: CallbackQuery):
-    ad_id = int(callback.data.split("_")[1])
-    async with db_pool.acquire() as conn:
-        ad = await conn.fetchrow("SELECT user_id FROM ads WHERE id = $1", ad_id)
-
-    if not ad:
-        return await callback.answer("❌ Объявление не найдено", show_alert=True)
-
-    if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
-        return await callback.answer("❌ У вас нет прав на закрытие этого объявления", show_alert=True)
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Да", callback_data=f"confirm_close_{ad_id}"),
-        InlineKeyboardButton(text="❌ Нет", callback_data=f"cancel_close_{ad_id}")
-    ]])
-    await callback.message.edit_text("❓ Вы уверены, что хотите закрыть объявление?", reply_markup=keyboard)
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("confirm_close_"))
-async def confirm_close_ad(callback: CallbackQuery):
-    ad_id = int(callback.data.split("_")[2])
-    
-    lock = ad_locks[ad_id]
-    if lock.locked():
-        return await callback.answer("⏳ Операция выполняется...", show_alert=False)
-        
-    async with lock:
-        try:
-            async with db_pool.acquire() as conn:
-                ad = await conn.fetchrow("SELECT message_ids, user_id FROM ads WHERE id = $1", ad_id)
-                
-            if not ad:
-                return await callback.answer("❌ Объявление не найдено", show_alert=True)
-
-            if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
-                return await callback.answer("❌ У вас нет прав на удаление этого объявления", show_alert=True)
-                
-            async with db_pool.acquire() as conn:
-                async with conn.transaction():
-                    await conn.execute("DELETE FROM ads WHERE id = $1", ad_id)
-            await delete_old_album(ad['message_ids'])
-            logger.info(f"Объявление {ad_id} закрыто пользователем {callback.from_user.id}")
-
-            async with db_pool.acquire() as conn:
-                ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", callback.from_user.id)
-                        
-            if not ads:
-                return await callback.message.edit_text("📭 У вас нет активных объявлений.")
-            await callback.message.edit_text("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads))
-            await callback.answer()
-        except Exception as e:
-            logger.error(f"Delete Error for ad {ad_id}: {e}")
-            return await callback.answer("❌ Ошибка при удалении", show_alert=True)
-        finally:
-            # Исправление 2: Чистим за собой память
-            ad_locks.pop(ad_id, None)
-
-@dp.callback_query(F.data.startswith("cancel_close_"))
-async def cancel_close_ad(callback: CallbackQuery):
-    ad_id = int(callback.data.split("_")[2])
-    async with db_pool.acquire() as conn:
-        ad = await conn.fetchrow("SELECT last_bump, user_id FROM ads WHERE id = $1", ad_id)
-        
-    if not ad:
-        return await callback.answer("❌ Объявление не найдено", show_alert=True)
-
-    if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
-        return await callback.answer("❌ Доступ ограничен", show_alert=True)
-
-    keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
-    await callback.message.edit_text(f"📦 Управление объявлением ID {ad_id}", reply_markup=keyboard)
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("edit_"))
-async def edit_price(callback: CallbackQuery, state: FSMContext):
-    ad_id = int(callback.data.split("_")[1])
-    async with db_pool.acquire() as conn:
-        ad = await conn.fetchrow("SELECT last_bump, user_id FROM ads WHERE id = $1", ad_id)
-        
-    if not ad:
-        return await callback.answer("❌ Объявление не найдено", show_alert=True)
-
-    if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
-        return await callback.answer("❌ У вас нет прав на редактирование этого объявления", show_alert=True)
-
-    if not is_admin(callback.from_user.id):
-        remaining_time = get_cooldown_remaining(ad['last_bump'])
-        if remaining_time:
-            return await callback.answer(f"⏳ Изменить цену нельзя.\nБудет доступно через: {remaining_time}", show_alert=True)
-            
-    await state.update_data(editing_ad_id=ad_id)
-    await callback.message.answer("💰 Введите новую цену (кратко):")
-    await state.set_state(EditPrice.waiting_price)
-    await callback.answer()
 
 @dp.message(EditPrice.waiting_price, F.text)
 async def save_new_price(message: Message, state: FSMContext):
@@ -716,13 +579,170 @@ async def save_new_price(message: Message, state: FSMContext):
         finally:
             ad_locks.pop(ad_id, None)
 
-@dp.callback_query(F.data.startswith("bump_"))
-async def bump_ad(callback: CallbackQuery):
+# =========================================
+# INTERFACE
+# =========================================
+
+@dp.message(F.text == "📂 Мои объявления")
+async def my_ads(message: Message):
+    async with db_pool.acquire() as conn:
+        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", message.from_user.id)
+        
+    if not ads:
+        return await message.answer("📭 У вас нет активных объявлений.")
+    await message.answer("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads, message.from_user.id))
+
+@dp.callback_query(F.data.startswith("ad_"))
+async def open_ad(callback: CallbackQuery):
+    if is_spamming(callback.from_user.id): return await callback.answer()
+
     ad_id = int(callback.data.split("_")[1])
+    async with db_pool.acquire() as conn:
+        ad = await conn.fetchrow("SELECT title, last_bump, user_id FROM ads WHERE id = $1", ad_id)
+        
+    if not ad:
+        return await callback.answer("❌ Объявление не найдено", show_alert=True)
+
+    if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
+        return await callback.answer("❌ У вас нет прав на просмотр этого объявления", show_alert=True)
+
+    keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
+    header_text = f"📦 Управление:\n<b>{html.escape(ad['title'])}</b>"
+    await callback.message.edit_text(header_text, reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query(F.data == "back_ads")
+async def back_ads(callback: CallbackQuery):
+    if is_spamming(callback.from_user.id): return await callback.answer()
+
+    async with db_pool.acquire() as conn:
+        ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", callback.from_user.id)
+        
+    if not ads:
+        return await callback.message.edit_text("📭 У вас нет активных объявлений.")
+    await callback.message.edit_text("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads, callback.from_user.id))
+    await callback.answer()
+
+# =========================================
+# MANAGEMENT: CLOSE & SINGLE BUMP
+# =========================================
+
+@dp.callback_query(F.data.regexp(r"^close_\d+$"))
+async def close_ad(callback: CallbackQuery):
+    if is_spamming(callback.from_user.id): return await callback.answer()
+
+    ad_id = int(callback.data.split("_")[1])
+    async with db_pool.acquire() as conn:
+        ad = await conn.fetchrow("SELECT title, user_id FROM ads WHERE id = $1", ad_id)
+
+    if not ad:
+        return await callback.answer("❌ Объявление не найдено", show_alert=True)
+
+    if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
+        return await callback.answer("❌ У вас нет прав на закрытие этого объявления", show_alert=True)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Да", callback_data=f"confirm_close_{ad_id}"),
+        InlineKeyboardButton(text="❌ Нет", callback_data=f"cancel_close_{ad_id}")
+    ]])
+    header_text = f"📦 Управление:\n<b>{html.escape(ad['title'])}</b>\n\n❓ Вы уверены, что хотите закрыть объявление?"
+    await callback.message.edit_text(header_text, reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("confirm_close_"))
+async def confirm_close_ad(callback: CallbackQuery):
+    ad_id = int(callback.data.split("_")[2])
     
     lock = ad_locks[ad_id]
     if lock.locked():
+        return await callback.answer("⏳ Операция выполняется...", show_alert=False)
+        
+    await callback.answer("Удаление...", show_alert=False)
+        
+    async with lock:
+        try:
+            async with db_pool.acquire() as conn:
+                ad = await conn.fetchrow("SELECT message_ids, user_id FROM ads WHERE id = $1", ad_id)
+                
+            if not ad:
+                return await callback.message.edit_text("❌ Объявление не найдено")
+
+            if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
+                return await callback.message.edit_text("❌ У вас нет прав на удаление этого объявления")
+                
+            async with db_pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("DELETE FROM ads WHERE id = $1", ad_id)
+            await delete_old_album(ad['message_ids'])
+            logger.info(f"Объявление {ad_id} закрыто пользователем {callback.from_user.id}")
+
+            async with db_pool.acquire() as conn:
+                ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", callback.from_user.id)
+                        
+            if not ads:
+                return await callback.message.edit_text("📭 У вас нет активных объявлений.")
+            await callback.message.edit_text("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads, callback.from_user.id))
+        except Exception as e:
+            logger.error(f"Delete Error for ad {ad_id}: {e}")
+            return await callback.message.edit_text("❌ Ошибка при удалении")
+        finally:
+            ad_locks.pop(ad_id, None)
+
+@dp.callback_query(F.data.startswith("cancel_close_"))
+async def cancel_close_ad(callback: CallbackQuery):
+    if is_spamming(callback.from_user.id): return await callback.answer()
+
+    ad_id = int(callback.data.split("_")[2])
+    async with db_pool.acquire() as conn:
+        ad = await conn.fetchrow("SELECT title, last_bump, user_id FROM ads WHERE id = $1", ad_id)
+        
+    if not ad:
+        return await callback.answer("❌ Объявление не найдено", show_alert=True)
+
+    if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
+        return await callback.answer("❌ Доступ ограничен", show_alert=True)
+
+    keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
+    header_text = f"📦 Управление:\n<b>{html.escape(ad['title'])}</b>"
+    await callback.message.edit_text(header_text, reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("edit_"))
+async def edit_price_button(callback: CallbackQuery, state: FSMContext):
+    if is_spamming(callback.from_user.id): return await callback.answer()
+
+    ad_id = int(callback.data.split("_")[1])
+    async with db_pool.acquire() as conn:
+        ad = await conn.fetchrow("SELECT last_bump, user_id FROM ads WHERE id = $1", ad_id)
+        
+    if not ad:
+        return await callback.answer("❌ Объявление не найдено", show_alert=True)
+
+    if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
+        return await callback.answer("❌ У вас нет прав на редактирование", show_alert=True)
+
+    if not is_admin(callback.from_user.id):
+        remaining_time = get_cooldown_remaining(ad['last_bump'])
+        if remaining_time:
+            return await callback.answer(f"⏳ Изменить цену нельзя.\nБудет доступно через: {remaining_time}", show_alert=True)
+            
+    await state.update_data(editing_ad_id=ad_id)
+    await callback.message.answer("💰 Введите новую цену (кратко):")
+    await state.set_state(EditPrice.waiting_price)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("bump_"))
+async def bump_ad(callback: CallbackQuery):
+    if is_spamming(callback.from_user.id): return await callback.answer()
+
+    ad_id = int(callback.data.split("_")[1])
+    lock = ad_locks[ad_id]
+    
+    if lock.locked():
         return await callback.answer("⏳ Операция уже выполняется...", show_alert=False)
+
+    # Моментальный ответ на Callback для обхода таймаута в 10 секунд
+    await callback.answer("⏳ Обновляем объявление...", show_alert=False)
 
     async with lock:
         try:
@@ -730,17 +750,17 @@ async def bump_ad(callback: CallbackQuery):
                 ad_row = await conn.fetchrow("SELECT * FROM ads WHERE id = $1", ad_id)
                 
             if not ad_row:
-                return await callback.answer("❌ Объявление не найдено", show_alert=True)
+                return await callback.message.edit_text("❌ Объявление не найдено")
 
             ad = dict(ad_row)
 
             if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
-                return await callback.answer("❌ У вас нет прав на поднятие этого объявления", show_alert=True)
+                return await callback.message.edit_text("❌ Доступ запрещен")
 
             if not is_admin(callback.from_user.id):
                 remaining_time = get_cooldown_remaining(ad["last_bump"])
                 if remaining_time:
-                    return await callback.answer(f"⏳ Поднять объявление нельзя.\nБудет доступно через: {remaining_time}", show_alert=True)
+                    return await callback.message.answer(f"⏳ Поднять объявление нельзя. Доступно через: {remaining_time}")
 
             photos = ad["photos"].split(",") if ad["photos"] else []
             username = ad["username"]
@@ -772,22 +792,45 @@ async def bump_ad(callback: CallbackQuery):
 
             await delete_old_album(old_message_ids)
 
+            # Обновление шапки с текущим временем, чтобы избежать ошибки MessageNotModified
+            now_str = datetime.now().strftime("%H:%M:%S")
+            header_text = f"📦 Управление:\n<b>{html.escape(ad['title'])}</b>\n\n🔄 <i>Обновлено: {now_str}</i>"
             new_keyboard = get_single_ad_keyboard(ad_id, datetime.now(), callback.from_user.id)
-            await callback.message.edit_text(f"📦 Управление объявлением ID {ad_id}", reply_markup=new_keyboard)
-            await callback.answer("✅ Объявление успешно поднято", show_alert=True)
+            
+            try:
+                await callback.message.edit_text(header_text, reply_markup=new_keyboard)
+            except TelegramAPIError:
+                pass 
+                
             logger.info(f"Объявление ID {ad_id} поднято")
         except Exception as e:
             await delete_old_album(",".join(msg_ids)) 
-            await callback.answer("❌ Ошибка при поднятии объявления.", show_alert=True)
+            await callback.message.answer("❌ Ошибка при поднятии объявления.")
             logger.error(f"Bump error for ID {ad_id}: {e}")
         finally:
             ad_locks.pop(ad_id, None)
 
 # =========================================
+# GLOBAL FALLBACK
+# =========================================
+
+# Должен быть строго в самом конце файла, чтобы ловить только "мусор"
+@dp.message(AdForm.action)
+@dp.message(AdForm.category)
+@dp.message(AdForm.title)
+@dp.message(AdForm.description)
+@dp.message(AdForm.condition)
+@dp.message(AdForm.price)
+@dp.message(AdForm.exchange)
+@dp.message(EditPrice.waiting_price)
+async def handle_invalid_content(message: Message):
+    await message.answer("⚠️ Ожидается текстовое сообщение. Пожалуйста, отправьте текст (или воспользуйтесь кнопками). Для отмены нажмите «🚫 Отмена».")
+
+
+# =========================================
 # WEB SERVER & INITIALIZATION
 # =========================================
 
-# Исправление 4: Настоящий Healthcheck
 async def healthcheck(request):
     try:
         async with db_pool.acquire() as conn:
