@@ -52,7 +52,7 @@ CHANNEL_ID = "@khv_marketplace"
 BOT_LINK = "https://t.me/khv_marketplace_bot"
 
 ADMIN_IDS = [1095957868]
-COOLDOWN_HOURS = 24  
+COOLDOWN_HOURS = 1 / 60   
 
 photo_locks = collections.defaultdict(asyncio.Lock)
 ad_locks = collections.defaultdict(asyncio.Lock)
