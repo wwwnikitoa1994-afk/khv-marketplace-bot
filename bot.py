@@ -34,7 +34,7 @@ CHANNEL_ID = "@khv_marketplace"
 BOT_LINK = "https://t.me/khv_marketplace_bot"
 
 ADMIN_IDS = [1095957868]
-COOLDOWN_HOURS = 1 / 60   # Ограничение поднятия — 24 часа
+COOLDOWN_HOURS = 24  # Ограничение поднятия — 24 часа
 
 photo_locks = {}  
 db_pool = None 
@@ -166,6 +166,10 @@ def get_cooldown_remaining(last_bump):
     except Exception:
         return None
 
+def pad_title(title: str) -> str:
+    """Заполняет пробелами до 27 символов, если длина меньше 27. Иначе оставляет как есть."""
+    return title.ljust(27)
+
 def build_hashtags(action, category):
     hashtags = []
     if action:
@@ -248,7 +252,8 @@ def get_my_ads_keyboard(ads, user_id):
     for ad in ads:
         remaining_time = None if is_admin(user_id) else get_cooldown_remaining(ad['last_bump'])
         prefix = "⏳ " if remaining_time else "✅ "
-        keyboard.append([InlineKeyboardButton(text=f"{prefix}{ad['title']}", callback_data=f"ad_{ad['id']}")])
+        display_title = pad_title(ad['title'])
+        keyboard.append([InlineKeyboardButton(text=f"{prefix}{display_title}", callback_data=f"ad_{ad['id']}")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_single_ad_keyboard(ad_id, last_bump, user_id):
@@ -459,7 +464,8 @@ async def open_ad(callback: CallbackQuery):
         await callback.answer("❌ Объявление не найдено", show_alert=True)
         return
     keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
-    await callback.message.edit_text(f"📦 {ad['title']}", reply_markup=keyboard)
+    display_title = pad_title(ad['title'])
+    await callback.message.edit_text(f"📦 {display_title}", reply_markup=keyboard)
     await callback.answer()
 
 @dp.callback_query(F.data == "back_ads")
@@ -519,7 +525,8 @@ async def cancel_close_ad(callback: CallbackQuery):
         await callback.answer("❌ Объявление не найдено", show_alert=True)
         return
     keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
-    await callback.message.edit_text(f"📦 {ad['title']}", reply_markup=keyboard)
+    display_title = pad_title(ad['title'])
+    await callback.message.edit_text(f"📦 {display_title}", reply_markup=keyboard)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("edit_"))
@@ -646,7 +653,8 @@ async def bump_ad(callback: CallbackQuery):
                                ",".join(msg_ids), datetime.now().isoformat(), ad_id)
 
         new_keyboard = get_single_ad_keyboard(ad_id, datetime.now().isoformat(), callback.from_user.id)
-        await callback.message.edit_text(f"📦 {ad['title']}", reply_markup=new_keyboard)
+        display_title = pad_title(ad['title'])
+        await callback.message.edit_text(f"📦 {display_title}", reply_markup=new_keyboard)
         await callback.answer("✅ Объявление успешно поднято", show_alert=True)
     except Exception as e:
         await callback.answer("❌ Ошибка при поднятии объявления.", show_alert=True)
