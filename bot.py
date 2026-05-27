@@ -109,7 +109,7 @@ action_keyboard = ReplyKeyboardMarkup(
 
 category_keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📱 Техника"), KeyboardButton(text="🛋 Мебель")],
+        [KeyboardButton(text="📱 Technique"), KeyboardButton(text="🛋 Мебель")],
         [KeyboardButton(text="👕 Одежда"), KeyboardButton(text="🎮 Развлечения")],
         [KeyboardButton(text="🚗 Авто"), KeyboardButton(text="🧸 Детское")],
         [KeyboardButton(text="🛠 Инструменты"), KeyboardButton(text="📚 Разное")]
@@ -166,9 +166,9 @@ def get_cooldown_remaining(last_bump):
     except Exception:
         return None
 
-def pad_title(title: str) -> str:
-    """Заполняет пробелами до 27 символов, если длина меньше 27. Иначе оставляет как есть."""
-    return title.ljust(27)
+def pad_header_title(text: str) -> str:
+    """Заполняет строку пробелами до 28 символов (длина 'Управление объявлением ID 13'), если она короче."""
+    return text.ljust(28)
 
 def build_hashtags(action, category):
     hashtags = []
@@ -252,8 +252,8 @@ def get_my_ads_keyboard(ads, user_id):
     for ad in ads:
         remaining_time = None if is_admin(user_id) else get_cooldown_remaining(ad['last_bump'])
         prefix = "⏳ " if remaining_time else "✅ "
-        display_title = pad_title(ad['title'])
-        keyboard.append([InlineKeyboardButton(text=f"{prefix}{display_title}", callback_data=f"ad_{ad['id']}")])
+        # Кнопки возвращены в исходное состояние (без принудительных пробелов)
+        keyboard.append([InlineKeyboardButton(text=f"{prefix}{ad['title']}", callback_data=f"ad_{ad['id']}")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_single_ad_keyboard(ad_id, last_bump, user_id):
@@ -452,7 +452,8 @@ async def my_ads(message: Message):
     if not ads:
         await message.answer("📭 У вас нет активных объявлений.")
         return
-    await message.answer("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads, message.from_user.id))
+    # Статично расширяем заголовок пробелами до длины 28 символов
+    await message.answer("📂 Ваши объявления:          ", reply_markup=get_my_ads_keyboard(ads, message.from_user.id))
 
 @dp.callback_query(F.data.startswith("ad_"))
 async def open_ad(callback: CallbackQuery):
@@ -464,8 +465,10 @@ async def open_ad(callback: CallbackQuery):
         await callback.answer("❌ Объявление не найдено", show_alert=True)
         return
     keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
-    display_title = pad_title(ad['title'])
-    await callback.message.edit_text(f"📦 {display_title}", reply_markup=keyboard)
+    
+    # Формируем строку и выдерживаем длину 28 символов (как у 'Управление объявлением ID 13')
+    header_text = pad_header_title(f"📦 {ad['title']}")
+    await callback.message.edit_text(header_text, reply_markup=keyboard)
     await callback.answer()
 
 @dp.callback_query(F.data == "back_ads")
@@ -476,7 +479,8 @@ async def back_ads(callback: CallbackQuery):
     if not ads:
         await callback.message.edit_text("📭 У вас нет активных объявлений.")
         return
-    await callback.message.edit_text("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads, callback.from_user.id))
+    # Статично расширяем заголовок пробелами до длины 28 символов
+    await callback.message.edit_text("📂 Ваши объявления:          ", reply_markup=get_my_ads_keyboard(ads, callback.from_user.id))
     await callback.answer()
 
 # =========================================
@@ -512,7 +516,8 @@ async def confirm_close_ad(callback: CallbackQuery):
     if not ads:
         await callback.message.edit_text("📭 У вас нет активных объявлений.")
         return
-    await callback.message.edit_text("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads, callback.from_user.id))
+    # Статично расширяем заголовок пробелами до длины 28 символов
+    await callback.message.edit_text("📂 Ваши объявления:          ", reply_markup=get_my_ads_keyboard(ads, callback.from_user.id))
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("cancel_close_"))
@@ -525,8 +530,10 @@ async def cancel_close_ad(callback: CallbackQuery):
         await callback.answer("❌ Объявление не найдено", show_alert=True)
         return
     keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
-    display_title = pad_title(ad['title'])
-    await callback.message.edit_text(f"📦 {display_title}", reply_markup=keyboard)
+    
+    # Формируем строку и выдерживаем длину 28 символов
+    header_text = pad_header_title(f"📦 {ad['title']}")
+    await callback.message.edit_text(header_text, reply_markup=keyboard)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("edit_"))
@@ -653,8 +660,10 @@ async def bump_ad(callback: CallbackQuery):
                                ",".join(msg_ids), datetime.now().isoformat(), ad_id)
 
         new_keyboard = get_single_ad_keyboard(ad_id, datetime.now().isoformat(), callback.from_user.id)
-        display_title = pad_title(ad['title'])
-        await callback.message.edit_text(f"📦 {display_title}", reply_markup=new_keyboard)
+        
+        # Формируем строку и выдерживаем длину 28 символов при успешном поднятии
+        header_text = pad_header_title(f"📦 {ad['title']}")
+        await callback.message.edit_text(header_text, reply_markup=new_keyboard)
         await callback.answer("✅ Объявление успешно поднято", show_alert=True)
     except Exception as e:
         await callback.answer("❌ Ошибка при поднятии объявления.", show_alert=True)
