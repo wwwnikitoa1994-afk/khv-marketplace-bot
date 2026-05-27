@@ -238,7 +238,6 @@ async def delete_old_album(message_ids_str):
         for msg_id in message_ids_str.split(","):
             if msg_id.strip():
                 await safe_delete_message(CHANNEL_ID, int(msg_id))
-                await asyncio.sleep(0.3)
 
 # =========================================
 # KEYBOARDS & INTERFACE LOGIC
@@ -246,24 +245,24 @@ async def delete_old_album(message_ids_str):
 
 def get_my_ads_keyboard(ready_ads, paused_ads):
     keyboard = []
-    # Сначала выводим кнопки объявлений, которые можно поднять сейчас
+    # Сначала добавляем чистые кнопки для готовых объявлений
     for ad in ready_ads:
         keyboard.append([InlineKeyboardButton(text=ad['title'], callback_data=f"ad_{ad['id']}")])
-    # Затем выводим кнопки объявлений на паузе
+    # Затем добавляем чистые кнопки для объявлений на КД
     for ad in paused_ads:
         keyboard.append([InlineKeyboardButton(text=ad['title'], callback_data=f"ad_{ad['id']}")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def format_my_ads_message(ready_ads, paused_ads):
-    message_text = "📂 <b>Ваши объявления:</b>\n"
+    message_text = "<b>Ваши объявления:</b>\n"
     
     if ready_ads:
-        message_text += "\n👇 <b>Можно поднять сейчас:</b>\n"
+        message_text += "\n👇<b>Можно поднять сейчас:</b>\n"
         for ad in ready_ads:
             message_text += f"• {ad['title']}\n"
             
     if paused_ads:
-        message_text += "\n⏳ <b>Поднять позже:</b>\n"
+        message_text += "\n💡<b>Поднять позже:</b>\n"
         for ad in paused_ads:
             message_text += f"• {ad['title']}\n"
             
@@ -272,8 +271,8 @@ def format_my_ads_message(ready_ads, paused_ads):
 def get_single_ad_keyboard(ad_id, last_bump, user_id):
     remaining_time = None if is_admin(user_id) else get_cooldown_remaining(last_bump)
     if remaining_time:
-        bump_text = f"⏳ Поднять ({remaining_time})"
-        edit_text = f"⏳ Изменить цену ({remaining_time})"
+        bump_text = f"⌛️ Поднять ({remaining_time})"
+        edit_text = f"⌛️ Изменить цену ({remaining_time})"
     else:
         bump_text = "🔄 Поднять"
         edit_text = "✏️ Изменить цену"
@@ -454,7 +453,7 @@ async def publish_post(message: Message, state: FSMContext):
         print(f"Publish error: {e}")
 
 # =========================================
-# INTERFACE LOGIC WITH SMART GROUPS
+# INTERFACE LOGIC
 # =========================================
 
 @dp.message(F.text == "📂 Мои объявления")
@@ -492,7 +491,7 @@ async def open_ad(callback: CallbackQuery):
         await callback.answer("❌ Объявление не найдено", show_alert=True)
         return
     keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
-    await callback.message.edit_text(f"📦 Управление объявлением ID {ad_id}", reply_markup=keyboard)
+    await callback.message.edit_text(f"Управление объявлением ID {ad_id}", reply_markup=keyboard)
     await callback.answer()
 
 @dp.callback_query(F.data == "back_ads")
@@ -522,7 +521,7 @@ async def back_ads(callback: CallbackQuery):
     await callback.answer()
 
 # =========================================
-# MANAGEMENT: CLOSE & EDIT PRICE & SINGLE BUMP
+# MANAGEMENT: CLOSE, EDIT PRICE & BUMP
 # =========================================
 
 @dp.callback_query(F.data.regexp(r"^close_\d+$"))
@@ -578,7 +577,7 @@ async def cancel_close_ad(callback: CallbackQuery):
         ad = await conn.fetchrow("SELECT last_bump FROM ads WHERE id = $1", ad_id)
         
     keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
-    await callback.message.edit_text(f"📦 Управление объявлением ID {ad_id}", reply_markup=keyboard)
+    await callback.message.edit_text(f"Управление объявлением ID {ad_id}", reply_markup=keyboard)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("edit_"))
@@ -662,6 +661,7 @@ async def save_new_price(message: Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("bump_"))
 async def bump_ad(callback: CallbackQuery):
     ad_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
     async with db_pool.acquire() as conn:
         ad_row = await conn.fetchrow("SELECT * FROM ads WHERE id = $1", ad_id)
         
@@ -670,7 +670,7 @@ async def bump_ad(callback: CallbackQuery):
         return
 
     ad = dict(ad_row)
-    if not is_admin(callback.from_user.id):
+    if not is_admin(user_id):
         remaining_time = get_cooldown_remaining(ad["last_bump"])
         if remaining_time:
             await callback.answer(f"⏳ Поднять объявление нельзя.\nБудет доступно через: {remaining_time}", show_alert=True)
@@ -700,13 +700,32 @@ async def bump_ad(callback: CallbackQuery):
         btn_msg = await bot.send_message(chat_id=CHANNEL_ID, text="🛒 KHV Marketplace", reply_markup=button)
         msg_ids.append(str(btn_msg.message_id))
 
+        # Обновляем таймер поднятия в БД
         async with db_pool.acquire() as conn:
             await conn.execute("UPDATE ads SET message_ids = $1, last_bump = $2 WHERE id = $3", 
                                ",".join(msg_ids), datetime.now().isoformat(), ad_id)
 
-        new_keyboard = get_single_ad_keyboard(ad_id, datetime.now().isoformat(), callback.from_user.id)
-        await callback.message.edit_text(f"📦 Управление объявлением ID {ad_id}", reply_markup=new_keyboard)
-        await callback.answer("✅ Объявление успешно поднято", show_alert=True)
+        # Сразу запрашиваем обновленный список объявлений пользователя
+        async with db_pool.acquire() as conn:
+            ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", user_id)
+
+        ready_ads = []
+        paused_ads = []
+        for row in ads:
+            ad_item = dict(row)
+            remaining = None if is_admin(user_id) else get_cooldown_remaining(ad_item['last_bump'])
+            if remaining:
+                paused_ads.append(ad_item)
+            else:
+                ready_ads.append(ad_item)
+
+        # Вместо одиночного экрана управления генерируем общий список, где текущий айтем уже улетел вниз!
+        msg_text = format_my_ads_message(ready_ads, paused_ads)
+        reply_markup = get_my_ads_keyboard(ready_ads, paused_ads)
+        
+        await callback.message.edit_text(msg_text, reply_markup=reply_markup)
+        await callback.answer("✅ Объявление успешно поднято и перенесено в очередь!", show_alert=True)
+        
     except Exception as e:
         await callback.answer("❌ Ошибка при поднятии объявления.", show_alert=True)
         print(f"Bump error: {e}")
