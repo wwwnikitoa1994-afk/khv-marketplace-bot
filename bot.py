@@ -161,6 +161,7 @@ photo_keyboard = ReplyKeyboardMarkup(
 # =========================================
 
 def get_padded_header(text):
+    # Растягиваем шапку невидимыми символами Брайля для фиксации ширины кнопок
     if len(text) < 30:
         return text + "\u2800" * (30 - len(text))
     return text
@@ -169,6 +170,7 @@ def is_admin(user_id):
     return user_id in ADMIN_IDS
 
 def is_spamming(user_id):
+    """Антифлуд: игнорируем нажатия чаще 1 раза в секунду"""
     now = datetime.now()
     if user_id in click_cache and (now - click_cache[user_id]).total_seconds() < 1.0:
         return True
@@ -299,7 +301,7 @@ def get_single_ad_keyboard(ad_id, last_bump, user_id):
         bump_text = f"⏳ Поднять ({remaining_time})"
         edit_text = f"⏳ Изменить цену ({remaining_time})"
     else:
-        bump_text = "👎 Можно поднять сейчас"
+        bump_text = "🔄 Можно поднять сейчас"
         edit_text = "✏️ Изменить цену"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -659,19 +661,20 @@ async def confirm_close_ad(callback: CallbackQuery):
     if lock.locked():
         return await callback.answer("⏳ Операция выполняется...", show_alert=False)
         
-    await callback.answer("Удаление...", show_alert=False)
-        
     async with lock:
         try:
             async with db_pool.acquire() as conn:
                 ad = await conn.fetchrow("SELECT message_ids, user_id FROM ads WHERE id = $1", ad_id)
                 
             if not ad:
-                return await callback.message.edit_text("❌ Объявление не найдено")
+                return await callback.answer("❌ Объявление не найдено", show_alert=True)
 
             if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
-                return await callback.message.edit_text("❌ У вас нет прав на удаление этого объявления")
+                return await callback.answer("❌ У вас нет прав на удаление", show_alert=True)
                 
+            # Только после успешных проверок БД отвечаем на колбэк
+            await callback.answer("Удаление...", show_alert=False)
+
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.execute("DELETE FROM ads WHERE id = $1", ad_id)
@@ -686,7 +689,7 @@ async def confirm_close_ad(callback: CallbackQuery):
             await callback.message.edit_text("📂 Ваши объявления:", reply_markup=get_my_ads_keyboard(ads, callback.from_user.id))
         except Exception as e:
             logger.error(f"Delete Error for ad {ad_id}: {e}")
-            return await callback.message.edit_text("❌ Ошибка при удалении")
+            return await callback.answer("❌ Ошибка при удалении", show_alert=True)
         finally:
             ad_locks.pop(ad_id, None)
 
@@ -726,6 +729,7 @@ async def edit_price_button(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         remaining_time = get_cooldown_remaining(ad['last_bump'])
         if remaining_time:
+            # Выводит красивый всплывающий POPUP
             return await callback.answer(f"⏳ Изменить цену нельзя.\nБудет доступно через: {remaining_time}", show_alert=True)
             
     await state.update_data(editing_ad_id=ad_id)
@@ -743,25 +747,28 @@ async def bump_ad(callback: CallbackQuery):
     if lock.locked():
         return await callback.answer("⏳ Операция уже выполняется...", show_alert=False)
 
-    await callback.answer("⏳ Обновляем объявление...", show_alert=False)
-
     async with lock:
         try:
+            # Делаем сверхбыструю проверку БД ДО ответа на колбэк
             async with db_pool.acquire() as conn:
                 ad_row = await conn.fetchrow("SELECT * FROM ads WHERE id = $1", ad_id)
                 
             if not ad_row:
-                return await callback.message.edit_text("❌ Объявление не найдено")
+                return await callback.answer("❌ Объявление не найдено", show_alert=True)
 
             ad = dict(ad_row)
 
             if ad['user_id'] != callback.from_user.id and not is_admin(callback.from_user.id):
-                return await callback.message.edit_text("❌ Доступ запрещен")
+                return await callback.answer("❌ Доступ запрещен", show_alert=True)
 
             if not is_admin(callback.from_user.id):
                 remaining_time = get_cooldown_remaining(ad["last_bump"])
                 if remaining_time:
-                    return await callback.message.answer(f"⏳ Поднять объявление нельзя. Доступно через: {remaining_time}")
+                    # Выводит красивый всплывающий POPUP вместо отправки текста в чат
+                    return await callback.answer(f"⏳ Поднять объявление нельзя.\nДоступно через: {remaining_time}", show_alert=True)
+
+            # Если кулдауна нет - отвечаем моментально без алертов и идем грузить фото
+            await callback.answer("⏳ Обновляем объявление...", show_alert=False)
 
             photos = ad["photos"].split(",") if ad["photos"] else []
             username = ad["username"]
@@ -805,7 +812,6 @@ async def bump_ad(callback: CallbackQuery):
             logger.info(f"Объявление ID {ad_id} поднято")
         except Exception as e:
             await delete_old_album(",".join(msg_ids)) 
-            await callback.message.answer("❌ Ошибка при поднятии объявления.")
             logger.error(f"Bump error for ID {ad_id}: {e}")
         finally:
             ad_locks.pop(ad_id, None)
@@ -824,7 +830,6 @@ async def bump_ad(callback: CallbackQuery):
 @dp.message(EditPrice.waiting_price)
 async def handle_invalid_content(message: Message):
     await message.answer("⚠️ Ожидается текстовое сообщение. Пожалуйста, отправьте текст (или воспользуйтесь кнопками). Для отмены нажмите «🚫 Отмена».")
-
 
 # =========================================
 # WEB SERVER & INITIALIZATION
