@@ -165,7 +165,6 @@ def get_padded_header(text):
         # Умная растяжка: чередуем обычный пробел и символ Брайля.
         # Это не дает им склеиться в одно огромное слово.
         smart_padding = " \u2800" * 12
-        return text + "\n\n" + smart_padding
     return text
 
 def is_admin(user_id):
