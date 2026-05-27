@@ -109,7 +109,7 @@ action_keyboard = ReplyKeyboardMarkup(
 
 category_keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📱 Technique"), KeyboardButton(text="🛋 Мебель")],
+        [KeyboardButton(text="📱 Техника"), KeyboardButton(text="🛋 Мебель")],
         [KeyboardButton(text="👕 Одежда"), KeyboardButton(text="🎮 Развлечения")],
         [KeyboardButton(text="🚗 Авто"), KeyboardButton(text="🧸 Детское")],
         [KeyboardButton(text="🛠 Инструменты"), KeyboardButton(text="📚 Разное")]
@@ -167,8 +167,14 @@ def get_cooldown_remaining(last_bump):
         return None
 
 def pad_header_title(text: str) -> str:
-    """Заполняет строку пробелами до 28 символов (длина 'Управление объявлением ID 13'), если она короче."""
-    return text.ljust(28)
+    """
+    Дополняет заголовок неразрывными пробелами (\\u00A0), чтобы Telegram их не удалял.
+    Используем длину 38, так как неразрывные пробелы визуально уже, чем буквы фразы 'Управление объявлением ID 13'.
+    """
+    target_visual_len = 38
+    if len(text) < target_visual_len:
+        return text + "\u00A0" * (target_visual_len - len(text))
+    return text
 
 def build_hashtags(action, category):
     hashtags = []
@@ -247,13 +253,14 @@ async def delete_old_album(message_ids_str):
 # KEYBOARDS LOGIC
 # =========================================
 
-def get_my_ads_keyboard(ads, user_id):
+def get_my_ads_keyboard(ads):
     keyboard = []
+    if ads:
+        # Кнопка массового поднятия возвращена на место
+        keyboard.append([InlineKeyboardButton(text="🔄 Поднять все доступные", callback_data="bump_all")])
     for ad in ads:
-        remaining_time = None if is_admin(user_id) else get_cooldown_remaining(ad['last_bump'])
-        prefix = "⏳ " if remaining_time else "✅ "
-        # Кнопки возвращены в исходное состояние (без принудительных пробелов)
-        keyboard.append([InlineKeyboardButton(text=f"{prefix}{ad['title']}", callback_data=f"ad_{ad['id']}")])
+        # Кнопки списка объявлений оставлены в исходном виде
+        keyboard.append([InlineKeyboardButton(text=f"📦 {ad['title']}", callback_data=f"ad_{ad['id']}")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_single_ad_keyboard(ad_id, last_bump, user_id):
@@ -299,16 +306,16 @@ async def get_category(message: Message, state: FSMContext):
     await message.answer("📌 Название товара:", reply_markup=ReplyKeyboardRemove())
     await state.set_state(AdForm.title)
 
+@dp.message(F.text == "🚫 Отмена")
+async def cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Создание объявления отменено", reply_markup=main_keyboard)
+
 @dp.message(AdForm.title)
 async def get_title(message: Message, state: FSMContext):
     await state.update_data(title=message.text)
     await message.answer("📝 Описание товара:")
     await state.set_state(AdForm.description)
-
-@dp.message(F.text == "🚫 Отмена")
-async def cancel(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("❌ Создание объявления отменено", reply_markup=main_keyboard)
 
 @dp.message(AdForm.description)
 async def get_description(message: Message, state: FSMContext):
@@ -441,7 +448,7 @@ async def publish_post(message: Message, state: FSMContext):
         print(f"Publish error: {e}")
 
 # =========================================
-# INTERFACE LOGIC
+# INTERFACE & MASS BUMP
 # =========================================
 
 @dp.message(F.text == "📂 Мои объявления")
@@ -450,15 +457,16 @@ async def my_ads(message: Message):
         ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", message.from_user.id)
         
     if not ads:
-        await message.answer("📭 У вас нет активных объявлений.")
+        await message.answer("📭 У вас нет active объявлений.")
         return
-    # Статично расширяем заголовок пробелами до длины 28 символов
-    await message.answer("📂 Ваши объявления:          ", reply_markup=get_my_ads_keyboard(ads, message.from_user.id))
+    # Применяем неразрывное заполнение заголовка
+    await message.answer(pad_header_title("📂 Ваши объявления:"), reply_markup=get_my_ads_keyboard(ads))
 
 @dp.callback_query(F.data.startswith("ad_"))
 async def open_ad(callback: CallbackQuery):
     ad_id = int(callback.data.split("_")[1])
     async with db_pool.acquire() as conn:
+        # Обязательно достаем title, чтобы подставить его вместо ID
         ad = await conn.fetchrow("SELECT title, last_bump FROM ads WHERE id = $1", ad_id)
         
     if not ad:
@@ -466,7 +474,7 @@ async def open_ad(callback: CallbackQuery):
         return
     keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
     
-    # Формируем строку и выдерживаем длину 28 символов (как у 'Управление объявлением ID 13')
+    # Заголовок конкретного товара вытягиваем неразрывными пробелами до нужной длины
     header_text = pad_header_title(f"📦 {ad['title']}")
     await callback.message.edit_text(header_text, reply_markup=keyboard)
     await callback.answer()
@@ -479,9 +487,77 @@ async def back_ads(callback: CallbackQuery):
     if not ads:
         await callback.message.edit_text("📭 У вас нет активных объявлений.")
         return
-    # Статично расширяем заголовок пробелами до длины 28 символов
-    await callback.message.edit_text("📂 Ваши объявления:          ", reply_markup=get_my_ads_keyboard(ads, callback.from_user.id))
+    # Применяем неразрывное заполнение заголовка
+    await callback.message.edit_text(pad_header_title("📂 Ваши объявления:"), reply_markup=get_my_ads_keyboard(ads))
     await callback.answer()
+
+@dp.callback_query(F.data == "bump_all")
+async def bump_all_ads(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    async with db_pool.acquire() as conn:
+        ad_rows = await conn.fetch("SELECT * FROM ads WHERE user_id = $1 ORDER BY id DESC", user_id)
+
+    if not ad_rows:
+        await callback.answer("📭 У вас нет активных объявлений.", show_alert=True)
+        return
+
+    bumped_count = 0
+    waiting_reports = []
+
+    for row in ad_rows:
+        ad = dict(row)
+        remaining_time = None if is_admin(user_id) else get_cooldown_remaining(ad["last_bump"])
+
+        if remaining_time:
+            waiting_reports.append(f"• \"{ad['title']}\" — осталось {remaining_time}")
+        else:
+            await delete_old_album(ad["message_ids"])
+
+            photos = ad["photos"].split(",") if ad["photos"] else []
+            username = ad["username"]
+            contact = f"@{username}" if username else "Username отсутствует"
+            hashtags = build_hashtags(ad["action"], ad["category"])
+
+            caption = build_caption({
+                "action": ad["action"], "category": ad["category"], "title": ad["title"],
+                "description": ad["description"], "condition": ad["condition"], "price": ad["price"],
+                "old_price": ad["old_price"], "exchange": ad["exchange"], "contact": contact, "hashtags": hashtags
+            })
+            media = [InputMediaPhoto(media=photo, caption=caption if i == 0 else "") for i, photo in enumerate(photos)]
+
+            try:
+                sent_messages = await bot.send_media_group(chat_id=CHANNEL_ID, media=media)
+                msg_ids = [str(m.message_id) for m in sent_messages]
+
+                button = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="➕ Подать своё объявление", url=BOT_LINK)
+                ]])
+                btn_msg = await bot.send_message(chat_id=CHANNEL_ID, text="🛒 KHV Marketplace", reply_markup=button, disable_web_page_preview=True)
+                msg_ids.append(str(btn_msg.message_id))
+
+                async with db_pool.acquire() as conn:
+                    await conn.execute("UPDATE ads SET message_ids = $1, last_bump = $2 WHERE id = $3", ",".join(msg_ids), datetime.now().isoformat(), ad["id"])
+                
+                bumped_count += 1
+            except Exception as e:
+                print(f"Mass bump error for ad {ad['id']}: {e}")
+
+    alert_text = f"✅ Успешно поднято объявлений: {bumped_count}.\n\n" if bumped_count > 0 else "⏳ Ни одно объявление не поднято.\n\n"
+    if waiting_reports:
+        alert_text += "Оставшееся время до поднятия:\n" + "\n".join(waiting_reports)
+    else:
+        alert_text += "Все ваши объявления успешно обновлены!"
+
+    async with db_pool.acquire() as conn:
+        fresh_ads = await conn.fetch("SELECT id, title, last_bump FROM ads WHERE user_id = $1 ORDER BY id DESC", user_id)
+
+    try:
+        # Применяем неразрывное заполнение заголовка
+        await callback.message.edit_text(pad_header_title("📂 Ваши объявления:"), reply_markup=get_my_ads_keyboard(fresh_ads))
+    except Exception:
+        pass
+
+    await callback.answer(alert_text, show_alert=True)
 
 # =========================================
 # MANAGEMENT: CLOSE & EDIT PRICE & SINGLE BUMP
@@ -516,8 +592,8 @@ async def confirm_close_ad(callback: CallbackQuery):
     if not ads:
         await callback.message.edit_text("📭 У вас нет активных объявлений.")
         return
-    # Статично расширяем заголовок пробелами до длины 28 символов
-    await callback.message.edit_text("📂 Ваши объявления:          ", reply_markup=get_my_ads_keyboard(ads, callback.from_user.id))
+    # Применяем неразрывное заполнение заголовка
+    await callback.message.edit_text(pad_header_title("📂 Ваши объявления:"), reply_markup=get_my_ads_keyboard(ads))
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("cancel_close_"))
@@ -531,7 +607,7 @@ async def cancel_close_ad(callback: CallbackQuery):
         return
     keyboard = get_single_ad_keyboard(ad_id, ad['last_bump'], callback.from_user.id)
     
-    # Формируем строку и выдерживаем длину 28 символов
+    # Применяем неразрывное заполнение заголовка
     header_text = pad_header_title(f"📦 {ad['title']}")
     await callback.message.edit_text(header_text, reply_markup=keyboard)
     await callback.answer()
@@ -661,7 +737,7 @@ async def bump_ad(callback: CallbackQuery):
 
         new_keyboard = get_single_ad_keyboard(ad_id, datetime.now().isoformat(), callback.from_user.id)
         
-        # Формируем строку и выдерживаем длину 28 символов при успешном поднятии
+        # Применяем неразрывное заполнение заголовка при успешном апдейте
         header_text = pad_header_title(f"📦 {ad['title']}")
         await callback.message.edit_text(header_text, reply_markup=new_keyboard)
         await callback.answer("✅ Объявление успешно поднято", show_alert=True)
