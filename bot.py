@@ -124,7 +124,8 @@ main_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="➕ Опубликовать объявление")],
         [KeyboardButton(text="📂 Мои объявления")]
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
+    is_persistent=True  # Защита от автоматического скрытия меню
 )
 
 action_keyboard = ReplyKeyboardMarkup(
@@ -161,10 +162,8 @@ photo_keyboard = ReplyKeyboardMarkup(
 # =========================================
 
 def get_padded_header(text):
-    if len(text) < 20:
-        # Умная растяжка: чередуем обычный пробел и символ Брайля.
-        # Это не дает им склеиться в одно огромное слово.
-        smart_padding = " \u2800" * 12
+    if len(text) < 30:
+        return text + " \u2800" * (30 - len(text))
     return text
 
 def is_admin(user_id):
@@ -302,7 +301,7 @@ def get_single_ad_keyboard(ad_id, last_bump, user_id):
         bump_text = f"⏳ Поднять ({remaining_time})"
         edit_text = f"⏳ Изменить цену ({remaining_time})"
     else:
-        bump_text = "🔄 Можно поднять"
+        bump_text = "🔄 Можно поднять сейчас"
         edit_text = "✏️ Изменить цену"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -481,15 +480,18 @@ async def publish_post(message: Message, state: FSMContext):
         btn_msg = await with_retry(bot.send_message, chat_id=CHANNEL_ID, text="🛒 KHV Marketplace", reply_markup=keyboard, disable_web_page_preview=True)
         msg_ids.append(str(btn_msg.message_id))
 
+        # Форсируем установку текущего времени со стороны Python для идеальной синхронизации
+        now = datetime.now()
+
         async with db_pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("""
-                INSERT INTO ads (user_id, username, action, category, title, description, condition, price, old_price, exchange, photos, message_ids, status)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                INSERT INTO ads (user_id, username, action, category, title, description, condition, price, old_price, exchange, photos, message_ids, status, created_at, last_bump)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 """, 
                     message.from_user.id, username, action, category, ad["title"], ad["description"],
                     ad["condition"], ad["price"], None, ad["exchange"], ",".join(photos),
-                    ",".join(msg_ids), "active"
+                    ",".join(msg_ids), "active", now, now
                 )
 
         await message.answer("✅ Объявление опубликовано", reply_markup=main_keyboard)
@@ -568,10 +570,13 @@ async def save_new_price(message: Message, state: FSMContext):
             msg_ids.append(str(btn_msg.message_id))
 
             old_message_ids = ad["message_ids"]
+            
+            # Используем локальное время для идеальной синхронизации
+            now = datetime.now()
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
-                    await conn.execute("UPDATE ads SET price = $1, old_price = $2, message_ids = $3, last_bump = CURRENT_TIMESTAMP WHERE id = $4", 
-                                       new_price, save_old_price, ",".join(msg_ids), ad_id)
+                    await conn.execute("UPDATE ads SET price = $1, old_price = $2, message_ids = $3, last_bump = $4 WHERE id = $5", 
+                                       new_price, save_old_price, ",".join(msg_ids), now, ad_id)
                                        
             await delete_old_album(old_message_ids)
             await message.answer("✅ Цена обновлена", reply_markup=main_keyboard)
@@ -794,16 +799,19 @@ async def bump_ad(callback: CallbackQuery):
             msg_ids.append(str(btn_msg.message_id))
 
             old_message_ids = ad["message_ids"]
+            
+            # Принудительная синхронизация времени
+            now = datetime.now()
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
-                    await conn.execute("UPDATE ads SET message_ids = $1, last_bump = CURRENT_TIMESTAMP WHERE id = $2", 
-                                       ",".join(msg_ids), ad_id)
+                    await conn.execute("UPDATE ads SET message_ids = $1, last_bump = $2 WHERE id = $3", 
+                                       ",".join(msg_ids), now, ad_id)
 
             await delete_old_album(old_message_ids)
 
-            now_str = datetime.now().strftime("%H:%M:%S")
+            now_str = now.strftime("%H:%M:%S")
             header = get_padded_header(html.escape(ad['title']))
-            new_keyboard = get_single_ad_keyboard(ad_id, datetime.now(), callback.from_user.id)
+            new_keyboard = get_single_ad_keyboard(ad_id, now, callback.from_user.id)
             
             try:
                 await callback.message.edit_text(f"📦 <b>{header}</b>\n\n🔄 <i>Обновлено: {now_str}</i>", reply_markup=new_keyboard)
