@@ -7,7 +7,7 @@ import sys
 import logging
 import collections
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from aiohttp import web
 
 from aiogram import Bot, Dispatcher, F
@@ -162,6 +162,7 @@ photo_keyboard = ReplyKeyboardMarkup(
 # =========================================
 
 def get_padded_header(text):
+    # Компактная умная растяжка без лишних отступов снизу
     if len(text) < 30:
         return text + " \u2800" * (30 - len(text))
     return text
@@ -181,8 +182,14 @@ def get_cooldown_remaining(last_bump):
     try:
         if isinstance(last_bump, str):
             last_bump = datetime.fromisoformat(last_bump)
-        last_bump = last_bump.replace(tzinfo=None) 
-        remaining = (last_bump + timedelta(hours=COOLDOWN_HOURS)) - datetime.now()
+        
+        # Принудительно делаем время осведомленным о часовом поясе
+        if last_bump.tzinfo is None:
+            last_bump = last_bump.replace(tzinfo=timezone.utc)
+            
+        # Высчитываем разницу с точным мировым временем
+        now = datetime.now(timezone.utc)
+        remaining = (last_bump + timedelta(hours=COOLDOWN_HOURS)) - now
         
         if remaining.total_seconds() >= 60:
             hours, remainder = divmod(int(remaining.total_seconds()), 3600)
@@ -299,9 +306,9 @@ def get_single_ad_keyboard(ad_id, last_bump, user_id):
     
     if remaining_time:
         bump_text = f"⏳ Поднять ({remaining_time})"
-        edit_text = f"⏳ Изменить цену ({remaining_time})"
+        edit_text = f"⏳ Цена ({remaining_time})"
     else:
-        bump_text = "🔄 Можно поднять сейчас"
+        bump_text = "🔄 Можно поднять"
         edit_text = "✏️ Изменить цену"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -480,18 +487,16 @@ async def publish_post(message: Message, state: FSMContext):
         btn_msg = await with_retry(bot.send_message, chat_id=CHANNEL_ID, text="🛒 KHV Marketplace", reply_markup=keyboard, disable_web_page_preview=True)
         msg_ids.append(str(btn_msg.message_id))
 
-        # Форсируем установку текущего времени со стороны Python для идеальной синхронизации
-        now = datetime.now()
-
+        # Оставляем CURRENT_TIMESTAMP, чтобы база сама проставила время создания и не крашила SQL
         async with db_pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("""
-                INSERT INTO ads (user_id, username, action, category, title, description, condition, price, old_price, exchange, photos, message_ids, status, created_at, last_bump)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                INSERT INTO ads (user_id, username, action, category, title, description, condition, price, old_price, exchange, photos, message_ids, status)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 """, 
                     message.from_user.id, username, action, category, ad["title"], ad["description"],
                     ad["condition"], ad["price"], None, ad["exchange"], ",".join(photos),
-                    ",".join(msg_ids), "active", now, now
+                    ",".join(msg_ids), "active"
                 )
 
         await message.answer("✅ Объявление опубликовано", reply_markup=main_keyboard)
@@ -571,12 +576,11 @@ async def save_new_price(message: Message, state: FSMContext):
 
             old_message_ids = ad["message_ids"]
             
-            # Используем локальное время для идеальной синхронизации
-            now = datetime.now()
+            # Используем безопасный метод базы данных для обновления времени
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
-                    await conn.execute("UPDATE ads SET price = $1, old_price = $2, message_ids = $3, last_bump = $4 WHERE id = $5", 
-                                       new_price, save_old_price, ",".join(msg_ids), now, ad_id)
+                    await conn.execute("UPDATE ads SET price = $1, old_price = $2, message_ids = $3, last_bump = CURRENT_TIMESTAMP WHERE id = $4", 
+                                       new_price, save_old_price, ",".join(msg_ids), ad_id)
                                        
             await delete_old_album(old_message_ids)
             await message.answer("✅ Цена обновлена", reply_markup=main_keyboard)
@@ -800,18 +804,20 @@ async def bump_ad(callback: CallbackQuery):
 
             old_message_ids = ad["message_ids"]
             
-            # Принудительная синхронизация времени
-            now = datetime.now()
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
-                    await conn.execute("UPDATE ads SET message_ids = $1, last_bump = $2 WHERE id = $3", 
-                                       ",".join(msg_ids), now, ad_id)
+                    await conn.execute("UPDATE ads SET message_ids = $1, last_bump = CURRENT_TIMESTAMP WHERE id = $2", 
+                                       ",".join(msg_ids), ad_id)
 
             await delete_old_album(old_message_ids)
 
-            now_str = now.strftime("%H:%M:%S")
+            # Для клавиатуры высчитываем время без конфликтов с БД
+            local_now = datetime.now()
+            now_str = local_now.strftime("%H:%M:%S")
+            utc_now = local_now.astimezone(timezone.utc)
+
             header = get_padded_header(html.escape(ad['title']))
-            new_keyboard = get_single_ad_keyboard(ad_id, now, callback.from_user.id)
+            new_keyboard = get_single_ad_keyboard(ad_id, utc_now, callback.from_user.id)
             
             try:
                 await callback.message.edit_text(f"📦 <b>{header}</b>\n\n🔄 <i>Обновлено: {now_str}</i>", reply_markup=new_keyboard)
