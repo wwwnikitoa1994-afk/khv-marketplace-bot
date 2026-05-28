@@ -871,7 +871,8 @@ async def start_web_server():
 
 async def init_db():
     global db_pool
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    # Добавлен параметр statement_cache_size=0 для совместимости с пулерами (PgBouncer)
+    db_pool = await asyncpg.create_pool(DATABASE_URL, statement_cache_size=0)
     async with db_pool.acquire() as conn:
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS ads (
