@@ -162,9 +162,7 @@ photo_keyboard = ReplyKeyboardMarkup(
 # =========================================
 
 def get_padded_header(text):
-    # Компактная умная растяжка без лишних отступов снизу
-    if len(text) < 30:
-        return text + " \u2800" * (30 - len(text))
+    # Отступы убраны
     return text
 
 def is_admin(user_id):
@@ -247,14 +245,15 @@ def build_caption(ad):
     if ad.get("condition") and condition.strip() and condition != "None":
         caption += f"📦 <i>Состояние:</i> <b>{condition}</b>\n"
 
+    # Добавляем знак рубля к цене
     if ad.get("price") and price.strip() and price != "None":
         if old_price and old_price != "None" and "ПРОДАМ" in action_text.upper():
-            caption += f"💰 <i>Цена:</i> <b><s>{old_price}</s> → {price}</b>\n"
+            caption += f"💰 <i>Цена:</i> <b><s>{old_price} ₽</s> → {price} ₽</b>\n"
         else:
             if "КУПЛЮ" in action_text.upper():
-                caption += f"💰 <i>Бюджет:</i> <b>{price}</b>\n"
+                caption += f"💰 <i>Бюджет:</i> <b>{price} ₽</b>\n"
             else:
-                caption += f"💰 <i>Цена:</i> <b>{price}</b>\n"
+                caption += f"💰 <i>Цена:</i> <b>{price} ₽</b>\n"
 
     if ad.get("exchange") and exchange.strip() and exchange != "None":
         caption += f"🔄 <i>Интересует:</i> <b>{exchange}</b>\n"
@@ -397,7 +396,7 @@ async def get_description(message: Message, state: FSMContext):
         await message.answer("📦 Состояние товара:", reply_markup=condition_keyboard)
         await state.set_state(AdForm.condition)
     elif action == "🔵 Куплю":
-        await message.answer("💰 Бюджет:")
+        await message.answer("💰 Бюджет (укажите только цифры):")
         await state.set_state(AdForm.price)
     else:
         await state.update_data(photos=[])
@@ -414,7 +413,7 @@ async def get_condition(message: Message, state: FSMContext):
     action = data.get("action", "")
 
     if action == "🟢 Продам":
-        await message.answer("💰 Цена:")
+        await message.answer("💰 Цена (укажите только цифры):")
         await state.set_state(AdForm.price)
     else:
         await message.answer("🔄 На что хотите обмен?")
@@ -422,8 +421,8 @@ async def get_condition(message: Message, state: FSMContext):
 
 @dp.message(AdForm.price, F.text)
 async def get_price(message: Message, state: FSMContext):
-    if len(message.text) > 50:
-        return await message.answer("⚠️ Текст цены слишком длинный. Укажите сумму:")
+    if not message.text.isdigit():
+        return await message.answer("⚠️ Пожалуйста, введите только числовое значение (без букв, пробелов и точек):")
 
     current_data = await state.get_data()
     photos = current_data.get("photos", [])
@@ -487,16 +486,18 @@ async def publish_post(message: Message, state: FSMContext):
         btn_msg = await with_retry(bot.send_message, chat_id=CHANNEL_ID, text="🛒 KHV Marketplace", reply_markup=keyboard, disable_web_page_preview=True)
         msg_ids.append(str(btn_msg.message_id))
 
-        # Оставляем CURRENT_TIMESTAMP, чтобы база сама проставила время создания и не крашила SQL
+        # Явно задаем UTC время для старта КД сразу после публикации
+        now_utc = datetime.now(timezone.utc)
+        
         async with db_pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("""
-                INSERT INTO ads (user_id, username, action, category, title, description, condition, price, old_price, exchange, photos, message_ids, status)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                INSERT INTO ads (user_id, username, action, category, title, description, condition, price, old_price, exchange, photos, message_ids, status, created_at, last_bump)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 """, 
                     message.from_user.id, username, action, category, ad["title"], ad["description"],
                     ad["condition"], ad["price"], None, ad["exchange"], ",".join(photos),
-                    ",".join(msg_ids), "active"
+                    ",".join(msg_ids), "active", now_utc, now_utc
                 )
 
         await message.answer("✅ Объявление опубликовано", reply_markup=main_keyboard)
@@ -515,8 +516,8 @@ async def publish_post(message: Message, state: FSMContext):
 
 @dp.message(EditPrice.waiting_price, F.text)
 async def save_new_price(message: Message, state: FSMContext):
-    if len(message.text) > 50:
-        return await message.answer("⚠️ Текст цены слишком длинный. Укажите сумму:")
+    if not message.text.isdigit():
+        return await message.answer("⚠️ Пожалуйста, введите только числовое значение (без букв, пробелов и точек):")
 
     new_price = message.text
     data = await state.get_data()
@@ -576,11 +577,11 @@ async def save_new_price(message: Message, state: FSMContext):
 
             old_message_ids = ad["message_ids"]
             
-            # Используем безопасный метод базы данных для обновления времени
+            now_utc = datetime.now(timezone.utc)
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
-                    await conn.execute("UPDATE ads SET price = $1, old_price = $2, message_ids = $3, last_bump = CURRENT_TIMESTAMP WHERE id = $4", 
-                                       new_price, save_old_price, ",".join(msg_ids), ad_id)
+                    await conn.execute("UPDATE ads SET price = $1, old_price = $2, message_ids = $3, last_bump = $4 WHERE id = $5", 
+                                       new_price, save_old_price, ",".join(msg_ids), now_utc, ad_id)
                                        
             await delete_old_album(old_message_ids)
             await message.answer("✅ Цена обновлена", reply_markup=main_keyboard)
@@ -743,7 +744,7 @@ async def edit_price_button(callback: CallbackQuery, state: FSMContext):
             return await callback.answer(f"⏳ Изменить цену нельзя.\nБудет доступно через: {remaining_time}", show_alert=True)
             
     await state.update_data(editing_ad_id=ad_id)
-    await callback.message.answer("💰 Введите новую цену:")
+    await callback.message.answer("💰 Введите новую цену (только цифры):")
     await state.set_state(EditPrice.waiting_price)
     await callback.answer()
 
@@ -804,10 +805,11 @@ async def bump_ad(callback: CallbackQuery):
 
             old_message_ids = ad["message_ids"]
             
+            now_utc = datetime.now(timezone.utc)
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
-                    await conn.execute("UPDATE ads SET message_ids = $1, last_bump = CURRENT_TIMESTAMP WHERE id = $2", 
-                                       ",".join(msg_ids), ad_id)
+                    await conn.execute("UPDATE ads SET message_ids = $1, last_bump = $2 WHERE id = $3", 
+                                       ",".join(msg_ids), now_utc, ad_id)
 
             await delete_old_album(old_message_ids)
 
