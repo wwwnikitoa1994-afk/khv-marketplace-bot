@@ -162,14 +162,12 @@ photo_keyboard = ReplyKeyboardMarkup(
 # =========================================
 
 def get_padded_header(text):
-    # Отступы убраны
     return text
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
 def is_spamming(user_id):
-    """Антифлуд: игнорируем нажатия чаще 1 раза в секунду"""
     now = datetime.now()
     if user_id in click_cache and (now - click_cache[user_id]).total_seconds() < 1.0:
         return True
@@ -181,11 +179,9 @@ def get_cooldown_remaining(last_bump):
         if isinstance(last_bump, str):
             last_bump = datetime.fromisoformat(last_bump)
         
-        # Принудительно делаем время осведомленным о часовом поясе
         if last_bump.tzinfo is None:
             last_bump = last_bump.replace(tzinfo=timezone.utc)
             
-        # Высчитываем разницу с точным мировым временем
         now = datetime.now(timezone.utc)
         remaining = (last_bump + timedelta(hours=COOLDOWN_HOURS)) - now
         
@@ -245,7 +241,6 @@ def build_caption(ad):
     if ad.get("condition") and condition.strip() and condition != "None":
         caption += f"📦 <i>Состояние:</i> <b>{condition}</b>\n"
 
-    # Добавляем знак рубля к цене
     if ad.get("price") and price.strip() and price != "None":
         if old_price and old_price != "None" and "ПРОДАМ" in action_text.upper():
             caption += f"💰 <i>Цена:</i> <b><s>{old_price} ₽</s> → {price} ₽</b>\n"
@@ -486,8 +481,8 @@ async def publish_post(message: Message, state: FSMContext):
         btn_msg = await with_retry(bot.send_message, chat_id=CHANNEL_ID, text="🛒 KHV Marketplace", reply_markup=keyboard, disable_web_page_preview=True)
         msg_ids.append(str(btn_msg.message_id))
 
-        # Явно задаем UTC время для старта КД сразу после публикации
-        now_utc = datetime.now(timezone.utc)
+        # Переводим время в строку для совместимости с базой
+        now_utc_str = datetime.now(timezone.utc).isoformat()
         
         async with db_pool.acquire() as conn:
             async with conn.transaction():
@@ -497,7 +492,7 @@ async def publish_post(message: Message, state: FSMContext):
                 """, 
                     message.from_user.id, username, action, category, ad["title"], ad["description"],
                     ad["condition"], ad["price"], None, ad["exchange"], ",".join(photos),
-                    ",".join(msg_ids), "active", now_utc, now_utc
+                    ",".join(msg_ids), "active", now_utc_str, now_utc_str
                 )
 
         await message.answer("✅ Объявление опубликовано", reply_markup=main_keyboard)
@@ -577,11 +572,12 @@ async def save_new_price(message: Message, state: FSMContext):
 
             old_message_ids = ad["message_ids"]
             
-            now_utc = datetime.now(timezone.utc)
+            # Переводим время в строку для совместимости с базой
+            now_utc_str = datetime.now(timezone.utc).isoformat()
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.execute("UPDATE ads SET price = $1, old_price = $2, message_ids = $3, last_bump = $4 WHERE id = $5", 
-                                       new_price, save_old_price, ",".join(msg_ids), now_utc, ad_id)
+                                       new_price, save_old_price, ",".join(msg_ids), now_utc_str, ad_id)
                                        
             await delete_old_album(old_message_ids)
             await message.answer("✅ Цена обновлена", reply_markup=main_keyboard)
@@ -740,7 +736,6 @@ async def edit_price_button(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         remaining_time = get_cooldown_remaining(ad['last_bump'])
         if remaining_time:
-            # Выводит красивый всплывающий POPUP
             return await callback.answer(f"⏳ Изменить цену нельзя.\nБудет доступно через: {remaining_time}", show_alert=True)
             
     await state.update_data(editing_ad_id=ad_id)
@@ -760,7 +755,6 @@ async def bump_ad(callback: CallbackQuery):
 
     async with lock:
         try:
-            # Делаем сверхбыструю проверку БД ДО ответа на колбэк
             async with db_pool.acquire() as conn:
                 ad_row = await conn.fetchrow("SELECT * FROM ads WHERE id = $1", ad_id)
                 
@@ -775,10 +769,8 @@ async def bump_ad(callback: CallbackQuery):
             if not is_admin(callback.from_user.id):
                 remaining_time = get_cooldown_remaining(ad["last_bump"])
                 if remaining_time:
-                    # Выводит красивый всплывающий POPUP вместо отправки текста в чат
                     return await callback.answer(f"⏳ Поднять объявление нельзя.\nДоступно через: {remaining_time}", show_alert=True)
 
-            # Если кулдауна нет - отвечаем моментально без алертов и идем грузить фото
             await callback.answer("⏳ Обновляем объявление...", show_alert=False)
 
             photos = ad["photos"].split(",") if ad["photos"] else []
@@ -805,15 +797,15 @@ async def bump_ad(callback: CallbackQuery):
 
             old_message_ids = ad["message_ids"]
             
-            now_utc = datetime.now(timezone.utc)
+            # Переводим время в строку для совместимости с базой
+            now_utc_str = datetime.now(timezone.utc).isoformat()
             async with db_pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.execute("UPDATE ads SET message_ids = $1, last_bump = $2 WHERE id = $3", 
-                                       ",".join(msg_ids), now_utc, ad_id)
+                                       ",".join(msg_ids), now_utc_str, ad_id)
 
             await delete_old_album(old_message_ids)
 
-            # Для клавиатуры высчитываем время без конфликтов с БД
             local_now = datetime.now()
             now_str = local_now.strftime("%H:%M:%S")
             utc_now = local_now.astimezone(timezone.utc)
@@ -871,7 +863,6 @@ async def start_web_server():
 
 async def init_db():
     global db_pool
-    # Добавлен параметр statement_cache_size=0 для совместимости с пулерами (PgBouncer)
     db_pool = await asyncpg.create_pool(DATABASE_URL, statement_cache_size=0)
     async with db_pool.acquire() as conn:
         await conn.execute("""
