@@ -34,7 +34,7 @@ from aiogram.types import (
 # CONFIG & LOGGER
 # =========================================
 
-logger = logging.getLogger("KHV_Market_Bot")
+logger = logging.getLogger("Yerevan_Market_Bot")
 logger.setLevel(logging.INFO)
 file_handler = RotatingFileHandler("bot.log", maxBytes=5*1024*1024, backupCount=2, encoding="utf-8")
 file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(funcName)s - %(message)s')
@@ -48,8 +48,8 @@ if not TOKEN:
     sys.exit(1)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/dbname") 
-CHANNEL_ID = "@khv_marketplace"
-BOT_LINK = "https://t.me/khv_marketplace_bot?start=menu"
+CHANNEL_ID = "@yerevan_marketplace"
+BOT_LINK = "https://t.me/yerevan_marketplace_bot?start=menu"
 
 ADMIN_IDS = [1095957868]
 COOLDOWN_HOURS = 24  
@@ -243,12 +243,12 @@ def build_caption(ad):
 
     if ad.get("price") and price.strip() and price != "None":
         if old_price and old_price != "None" and "ПРОДАМ" in action_text.upper():
-            caption += f"💰 <i>Цена:</i> <b><s>{old_price} ₽</s> → {price} ₽</b>\n"
+            caption += f"💰 <i>Цена:</i> <b><s>{old_price} ֏</s> → {price} ֏</b>\n"
         else:
             if "КУПЛЮ" in action_text.upper():
-                caption += f"💰 <i>Бюджет:</i> <b>{price} ₽</b>\n"
+                caption += f"💰 <i>Бюджет:</i> <b>{price} ֏</b>\n"
             else:
-                caption += f"💰 <i>Цена:</i> <b>{price} ₽</b>\n"
+                caption += f"💰 <i>Цена:</i> <b>{price} ֏</b>\n"
 
     if ad.get("exchange") and exchange.strip() and exchange != "None":
         caption += f"🔄 <i>Интересует:</i> <b>{exchange}</b>\n"
@@ -336,7 +336,7 @@ class EditPrice(StatesGroup):
 
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer("🛒 Добро пожаловать в KHV Marketplace", reply_markup=main_keyboard)
+    await message.answer("🛒 Добро пожаловать в Yerevan Marketplace", reply_markup=main_keyboard)
 
 @dp.message(F.text == "➕ Опубликовать объявление")
 async def create_ad(message: Message, state: FSMContext):
@@ -391,7 +391,7 @@ async def get_description(message: Message, state: FSMContext):
         await message.answer("📦 Состояние товара:", reply_markup=condition_keyboard)
         await state.set_state(AdForm.condition)
     elif action == "🔵 Куплю":
-        await message.answer("💰 Бюджет (укажите только цифры):")
+        await message.answer("💰 Бюджет в драмах (укажите только цифры):")
         await state.set_state(AdForm.price)
     else:
         await state.update_data(photos=[])
@@ -408,7 +408,7 @@ async def get_condition(message: Message, state: FSMContext):
     action = data.get("action", "")
 
     if action == "🟢 Продам":
-        await message.answer("💰 Цена (укажите только цифры):")
+        await message.answer("💰 Цена в драмах (укажите только цифры):")
         await state.set_state(AdForm.price)
     else:
         await message.answer("🔄 На что хотите обмен?")
@@ -478,7 +478,7 @@ async def publish_post(message: Message, state: FSMContext):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="➕ Подать своё объявление", url=BOT_LINK)
         ]])
-        btn_msg = await with_retry(bot.send_message, chat_id=CHANNEL_ID, text="🛒 KHV Marketplace", reply_markup=keyboard, disable_web_page_preview=True)
+        btn_msg = await with_retry(bot.send_message, chat_id=CHANNEL_ID, text="🛒 Yerevan Marketplace", reply_markup=keyboard, disable_web_page_preview=True)
         msg_ids.append(str(btn_msg.message_id))
 
         # Переводим время в строку для совместимости с базой
@@ -567,7 +567,7 @@ async def save_new_price(message: Message, state: FSMContext):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="➕ Подать своё объявление", url=BOT_LINK)
             ]])
-            btn_msg = await with_retry(bot.send_message, chat_id=CHANNEL_ID, text="🛒 KHV Marketplace", reply_markup=keyboard, disable_web_page_preview=True)
+            btn_msg = await with_retry(bot.send_message, chat_id=CHANNEL_ID, text="🛒 Yerevan Marketplace", reply_markup=keyboard, disable_web_page_preview=True)
             msg_ids.append(str(btn_msg.message_id))
 
             old_message_ids = ad["message_ids"]
@@ -739,7 +739,7 @@ async def edit_price_button(callback: CallbackQuery, state: FSMContext):
             return await callback.answer(f"⏳ Изменить цену нельзя.\nБудет доступно через: {remaining_time}", show_alert=True)
             
     await state.update_data(editing_ad_id=ad_id)
-    await callback.message.answer("💰 Введите новую цену (только цифры):")
+    await callback.message.answer("💰 Введите новую цену в драмах (только цифры):")
     await state.set_state(EditPrice.waiting_price)
     await callback.answer()
 
@@ -792,7 +792,7 @@ async def bump_ad(callback: CallbackQuery):
             button = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="➕ Подать своё объявление", url=BOT_LINK)
             ]])
-            btn_msg = await with_retry(bot.send_message, chat_id=CHANNEL_ID, text="🛒 KHV Marketplace", reply_markup=button)
+            btn_msg = await with_retry(bot.send_message, chat_id=CHANNEL_ID, text="🛒 Yerevan Marketplace", reply_markup=button)
             msg_ids.append(str(btn_msg.message_id))
 
             old_message_ids = ad["message_ids"]
