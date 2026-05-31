@@ -209,6 +209,15 @@ def build_hashtags(action, category):
             
     return " ".join(hashtags) if hashtags else "#разное"
 
+def format_price(price_val):
+    """Форматирует число, добавляя пробелы как разделители тысяч (42000 -> 42 000)"""
+    if not price_val or str(price_val) == "None":
+        return price_val
+    try:
+        return f"{int(price_val):,}".replace(",", " ")
+    except (ValueError, TypeError):
+        return price_val
+
 def build_caption(ad):
     action_raw = str(ad.get('action', ''))
     category_raw = str(ad.get('category', ''))
@@ -228,8 +237,13 @@ def build_caption(ad):
     title = html.escape(str(ad.get('title', '')))
     description = html.escape(str(ad.get('description', '')))
     condition = html.escape(str(ad.get('condition', '')))
-    price = html.escape(str(ad.get('price', '')))
-    old_price = html.escape(str(ad.get('old_price', ''))) if ad.get('old_price') else None
+    
+    raw_price = str(ad.get('price', ''))
+    price = html.escape(format_price(raw_price))
+    
+    raw_old_price = str(ad.get('old_price', '')) if ad.get('old_price') else None
+    old_price = html.escape(format_price(raw_old_price)) if raw_old_price else None
+
     exchange = html.escape(str(ad.get('exchange', '')))
     contact = html.escape(str(ad.get('contact', '')))
     hashtags = html.escape(str(ad.get('hashtags', '')))
