@@ -49,7 +49,7 @@ if not TOKEN:
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/dbname") 
 CHANNEL_ID = "@yerevan_marketplace"
-BOT_LINK = "https://t.me/KHV_marketplace_bot?start=menu"
+BOT_LINK = "https://t.me/khv_marketplace_bot?start=menu"
 
 ADMIN_IDS = [1095957868]
 COOLDOWN_HOURS = 24  
